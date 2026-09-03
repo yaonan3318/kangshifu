@@ -20,6 +20,17 @@ class Settings(BaseSettings):
     search_candidate_limit: int = 30
     search_rrf_k: int = 60
     search_vector_min_similarity: float = 0.55
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = "qwen3:8b"
+    ollama_keep_alive: int = 0
+    ollama_timeout_seconds: float = 180.0
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-chat"
+    deepseek_api_key: str = ""
+    deepseek_timeout_seconds: float = 120.0
+    rag_source_limit: int = 6
+    rag_history_turns: int = 6
+    rag_max_context_chars: int = 18_000
     bind_host: str = "127.0.0.1"
     bind_port: int = 8000
     cors_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
