@@ -67,6 +67,12 @@ function stop() {
   activeController.value?.abort()
 }
 
+function handleKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return
+  event.preventDefault()
+  void ask()
+}
+
 function clearConversation() {
   stop()
   messages.value = []
@@ -146,11 +152,11 @@ onBeforeUnmount(stop)
         <strong v-if="status && !status.deepseek_configured">尚未配置 API Key，本次仍将使用千问本地回答。</strong>
       </p>
       <form @submit.prevent="ask">
-        <textarea v-model="question" rows="3" maxlength="1000" placeholder="输入关于公司资料的问题…" @keydown.meta.enter.prevent="ask" @keydown.ctrl.enter.prevent="ask"></textarea>
+        <textarea v-model="question" rows="3" maxlength="1000" placeholder="输入关于公司资料的问题…" @keydown="handleKeydown"></textarea>
         <button v-if="activeController" type="button" class="stop-answer" @click="stop">停止</button>
         <button v-else type="submit" :disabled="!question.trim()">发送</button>
       </form>
-      <small>按 ⌘ + Enter 发送 · 当前对话不会永久保存</small>
+      <small>Enter 发送 · Shift + Enter 换行 · 当前对话不会永久保存</small>
     </section>
   </main>
 </template>
