@@ -54,7 +54,7 @@ class DocumentService:
         finally:
             self.storage.discard(staged)
 
-    def list(self, filters: DocumentFilters) -> tuple[list[Document], int]:
+    def list_documents(self, filters: DocumentFilters) -> tuple[list[Document], int]:
         clauses = [Document.status != DocumentStatus.DELETING]
         if filters.query:
             clauses.append(Document.original_name.ilike(f"%{filters.query}%"))

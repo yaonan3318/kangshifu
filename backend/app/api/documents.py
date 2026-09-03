@@ -40,7 +40,7 @@ def list_documents(
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> DocumentListResponse:
     filters = DocumentFilters(query=query, extension=extension, status=document_status, page=page, page_size=page_size)
-    documents, total = service.list(filters)
+    documents, total = service.list_documents(filters)
     return DocumentListResponse(items=[DocumentResponse.model_validate(item) for item in documents], page=page, page_size=page_size, total=total)
 
 
