@@ -1,6 +1,6 @@
 # Company Search
 
-Mac 本地文档资料库。当前版本提供安全上传、托管存储、文档解析、本地 OCR、结构化切片以及关键词与语义混合检索。
+Mac 本地公司知识库。当前版本提供安全上传、文档解析、本地 OCR、混合检索，以及由千问和可选 DeepSeek 驱动的 RAG 问答。
 
 ## 第一阶段能力
 
@@ -16,6 +16,9 @@ Mac 本地文档资料库。当前版本提供安全上传、托管存储、文�
 - 使用 PostgreSQL 全文索引和 pgvector 分别召回候选片段，并通过 RRF 融合排序。
 - 语义候选必须达到最低相似度，结果不会为了凑满数量而返回明显无关的文档。
 - 可按文件类型、文件名和添加日期筛选，结果显示来源位置、OCR 信息及命中方式。
+- 默认使用 Ollama `qwen3:8b` 在本机根据检索片段生成带引用的答案。
+- 用户主动打开开关后，可让 DeepSeek 根据内部片段和千问初稿生成合并答案。
+- DeepSeek 未配置或调用失败时保留本地答案，不会中断问答。
 - 服务仅监听 `127.0.0.1`，不会开放到局域网或公网。
 
 ## Mac 环境要求
@@ -25,6 +28,7 @@ Mac 本地文档资料库。当前版本提供安全上传、托管存储、文�
 - Node.js 20 或更高版本
 - Docker Desktop
 - Homebrew
+- Ollama 和本地 `qwen3:8b`（仅知识问答需要）
 - 至少 10 GB 可用磁盘
 
 ## 安装
@@ -46,6 +50,13 @@ cd kangshifu
 5. 启动 PostgreSQL + pgvector。
 6. 执行 Alembic 数据库迁移。
 7. 下载 BGE-M3 到本机资料目录。首次下载耗时取决于网络，后续安装会复用缓存。
+
+`setup.sh` 不会自动安装 Ollama、登录云端账号或修改其他项目的 Conda 环境。安装 Ollama 后执行：
+
+```bash
+ollama pull qwen3:8b
+./scripts/check-llm.sh
+```
 
 ## 启动与停止
 
@@ -98,8 +109,52 @@ GET    /api/documents/{id}/download
 POST   /api/documents/{id}/reprocess
 DELETE /api/documents/{id}
 POST   /api/search
+GET    /api/answer/status
+POST   /api/answer/stream
 GET    /api/health
 ```
+
+## 第四期 RAG 问答配置
+
+本地问答不需要任何云端账号。千问通过独立的 Ollama 进程运行，回答完成后立即释放模型运行内存，模型文件继续保留在硬盘。
+
+如需 DeepSeek 增强，只把 API Key 写入 Mac 本地的 `backend/.env`：
+
+```env
+COMPANY_SEARCH_DEEPSEEK_API_KEY=替换为你的真实Key
+```
+
+不要把真实 Key 写入 `.env.example`、Python、Vue、截图或 Git。修改配置后需要重启：
+
+```bash
+./scripts/stop.sh
+./scripts/start.sh
+```
+
+DeepSeek 开关默认关闭。打开开关但没有填写 Key 时，系统仍返回千问本地答案，并提示“尚未配置 DeepSeek API Key，本次使用本地模型回答”。打开且配置有效时，本次问题、引用片段和千问初稿会发送给 DeepSeek。
+
+### Mac 验证顺序
+
+更新代码后运行：
+
+```bash
+conda activate company-search
+./scripts/stop.sh
+./scripts/setup.sh
+./scripts/check-llm.sh
+./scripts/start.sh
+```
+
+依次验证：
+
+1. 关闭 DeepSeek，提出文档内问题，回答显示“千问本地回答”并带真实来源。
+2. 打开 DeepSeek但不配置 Key，仍得到本地答案并看到未配置提示。
+3. 配置 Key并重启，打开开关后得到“DeepSeek 增强”答案。
+4. 临时退出 Ollama，页面显示本地模型未就绪及修复命令。
+5. 提出资料库完全没有的问题：关闭开关时只提示内部资料没有答案；打开 DeepSeek 时显示明确标记的通用知识。
+6. 连续追问一次，确认每轮都有新的检索阶段；刷新页面后历史清空。
+7. 回答结束后执行 `ollama ps`，确认 `qwen3:8b` 不持续占用运行内存。
+8. DeepSeek 不可用或余额不足时，确认千问本地答案仍然保留。
 
 ## 第三期更新与验证
 
@@ -137,3 +192,5 @@ git pull origin main
 - [第一期实施计划](docs/superpowers/plans/2026-09-03-local-document-upload-phase1.md)
 - [第二期实施计划](docs/superpowers/plans/2026-09-03-local-document-processing-phase2.md)
 - [第三期实施计划](docs/superpowers/plans/2026-09-03-local-hybrid-search-phase3.md)
+- [第四期设计](docs/superpowers/specs/2026-09-03-local-rag-answering-design.md)
+- [第四期实施计划](docs/superpowers/plans/2026-09-03-local-rag-answering-phase4.md)
