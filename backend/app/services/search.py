@@ -73,9 +73,12 @@ class SearchService:
     def _vector_candidates(self, query: str, request: SearchRequest) -> list[Candidate]:
         vector = self.embeddings.encode_query(query)
         distance = DocumentChunk.embedding.cosine_distance(vector)
+        maximum_distance = 1.0 - self.settings.search_vector_min_similarity
         rows = self.session.execute(
             select(DocumentChunk, Document).join(Document).where(
-                *self._base_clauses(request), DocumentChunk.embedding.is_not(None)
+                *self._base_clauses(request),
+                DocumentChunk.embedding.is_not(None),
+                distance <= maximum_distance,
             ).order_by(distance, DocumentChunk.id).limit(self.settings.search_candidate_limit)
         ).all()
         return [Candidate(chunk=row[0], document=row[1]) for row in rows]

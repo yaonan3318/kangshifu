@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     embedding_batch_size: int = 8
     search_candidate_limit: int = 30
     search_rrf_k: int = 60
+    search_vector_min_similarity: float = 0.55
     bind_host: str = "127.0.0.1"
     bind_port: int = 8000
     cors_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
