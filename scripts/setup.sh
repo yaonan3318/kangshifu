@@ -8,20 +8,32 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
-for command_name in python3 node npm docker; do
+for command_name in node npm docker; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "Missing required command: $command_name" >&2
     exit 1
   fi
 done
 
-python_version="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-if [[ "$python_version" != "3.12" && "$python_version" != "3.13" ]]; then
-  echo "Python 3.12 or 3.13 is required; found $python_version." >&2
+python_command=""
+for candidate in python python3.13 python3.12 python3; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    candidate_version="$("$candidate" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+    if [[ "$candidate_version" == "3.12" || "$candidate_version" == "3.13" ]]; then
+      python_command="$(command -v "$candidate")"
+      python_version="$candidate_version"
+      break
+    fi
+  fi
+done
+if [[ -z "$python_command" ]]; then
+  echo "Python 3.12 or 3.13 is required in the active environment." >&2
+  echo "Create and activate an isolated environment, for example: conda create -n company-search python=3.13" >&2
   exit 1
 fi
+echo "Using Python $python_version from $python_command"
 
-if ! python3 -c 'import shutil; from pathlib import Path; raise SystemExit(0 if shutil.disk_usage(Path.home()).free >= 10 * 1024**3 else 1)'; then
+if ! "$python_command" -c 'import shutil; from pathlib import Path; raise SystemExit(0 if shutil.disk_usage(Path.home()).free >= 10 * 1024**3 else 1)'; then
   echo "At least 10 GB of free disk space is required for the local embedding model." >&2
   exit 1
 fi
@@ -34,7 +46,7 @@ for formula in libmagic tesseract tesseract-lang; do
   brew list "$formula" >/dev/null 2>&1 || brew install "$formula"
 done
 
-python3 -m venv "$project_dir/backend/.venv"
+"$python_command" -m venv "$project_dir/backend/.venv"
 "$project_dir/backend/.venv/bin/python" -m pip install --upgrade pip
 "$project_dir/backend/.venv/bin/python" -m pip install -e "$project_dir/backend"
 
