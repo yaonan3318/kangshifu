@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="820" viewBox="0 0 1400 820">
+  <rect width="1400" height="820" fill="#f7f8fc"/>
+  <style>
+    .title{font:700 32px system-ui,sans-serif;fill:#172033}.sub{font:16px system-ui,sans-serif;fill:#667085}.head{font:700 19px system-ui,sans-serif;fill:#172033}.text{font:15px system-ui,sans-serif;fill:#475467}.num{font:700 15px system-ui,sans-serif;fill:#fff}.arrow{font:32px system-ui,sans-serif;fill:#7f8aa3}.key{font:700 16px system-ui,sans-serif;fill:#4f46e5}
+  </style>
+  <text x="60" y="62" class="title">公司资料检索 + 智能问答</text>
+  <text x="60" y="92" class="sub">混合检索与 RAG：既返回相关文档，也生成带原文引用的答案</text>
+
+  <g transform="translate(60 145)">
+    <rect width="330" height="210" rx="18" fill="#fff" stroke="#d9deea" stroke-width="2"/>
+    <circle cx="34" cy="34" r="19" fill="#4f46e5"/><text x="29" y="40" class="num">1</text>
+    <text x="65" y="41" class="head">资料来源</text>
+    <text x="28" y="88" class="text">PDF / Word / Excel / PPT</text>
+    <text x="28" y="122" class="text">网页、Wiki、文件服务器</text>
+    <text x="28" y="156" class="text">手工上传或定时同步</text>
+    <text x="28" y="190" class="text">记录部门、日期、版本与权限</text>
+  </g>
+  <text x="411" y="260" class="arrow">→</text>
+  <g transform="translate(465 145)">
+    <rect width="390" height="210" rx="18" fill="#fff" stroke="#d9deea" stroke-width="2"/>
+    <circle cx="34" cy="34" r="19" fill="#4f46e5"/><text x="29" y="40" class="num">2</text>
+    <text x="65" y="41" class="head">解析与治理</text>
+    <text x="28" y="88" class="text">提取文字、标题、表格；扫描件 OCR</text>
+    <text x="28" y="122" class="text">按章节与语义切分，保留页码和来源</text>
+    <text x="28" y="156" class="text">去重、分类、标签与版本管理</text>
+    <text x="28" y="190" class="text">继承文档的部门和人员权限</text>
+  </g>
+  <text x="876" y="260" class="arrow">→</text>
+  <g transform="translate(930 145)">
+    <rect width="410" height="210" rx="18" fill="#fff" stroke="#8b83ee" stroke-width="2"/>
+    <circle cx="34" cy="34" r="19" fill="#4f46e5"/><text x="29" y="40" class="num">3</text>
+    <text x="65" y="41" class="head">建立双路索引</text>
+    <text x="28" y="88" class="key">关键词索引</text><text x="135" y="88" class="text">精确术语、编号、文件名</text>
+    <text x="28" y="126" class="key">向量索引</text><text x="135" y="126" class="text">同义表达、自然语言问题</text>
+    <text x="28" y="164" class="key">元数据</text><text x="105" y="164" class="text">部门、日期、类型、版本</text>
+  </g>
+
+  <path d="M1135 375 C1135 415 700 405 700 445" fill="none" stroke="#9aa4b8" stroke-width="3" marker-end="url(#a)"/>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#9aa4b8"/></marker></defs>
+
+  <g transform="translate(60 475)">
+    <rect width="330" height="180" rx="18" fill="#fff" stroke="#d9deea" stroke-width="2"/>
+    <circle cx="34" cy="34" r="19" fill="#4f46e5"/><text x="29" y="40" class="num">4</text>
+    <text x="65" y="41" class="head">用户输入</text>
+    <rect x="28" y="75" width="274" height="48" rx="10" fill="#f3f4f8" stroke="#d9deea"/>
+    <text x="45" y="105" class="text">华东区出差住宿标准？</text>
+    <text x="28" y="151" class="sub">可附部门、日期等筛选条件</text>
+  </g>
+  <text x="411" y="575" class="arrow">→</text>
+  <g transform="translate(465 475)">
+    <rect width="390" height="180" rx="18" fill="#eeecff" stroke="#7c6ee6" stroke-width="3"/>
+    <circle cx="34" cy="34" r="19" fill="#4f46e5"/><text x="29" y="40" class="num">5</text>
+    <text x="65" y="41" class="head">混合检索与重排</text>
+    <text x="28" y="88" class="text">关键词召回 + 语义召回</text>
+    <text x="28" y="122" class="text">先做权限过滤，再进行相关性重排</text>
+    <text x="28" y="156" class="text">选择最可靠的若干原文片段</text>
+  </g>
+  <text x="876" y="575" class="arrow">→</text>
+  <g transform="translate(930 475)">
+    <rect width="410" height="180" rx="18" fill="#fff" stroke="#d9deea" stroke-width="2"/>
+    <circle cx="34" cy="34" r="19" fill="#4f46e5"/><text x="29" y="40" class="num">6</text>
+    <text x="65" y="41" class="head">两类结果</text>
+    <text x="28" y="88" class="text">相关文档列表、命中内容与筛选</text>
+    <text x="28" y="122" class="text">AI 汇总答案 + 出处 + 页码</text>
+    <text x="28" y="156" class="text">点击引用跳回原文；无依据则不回答</text>
+  </g>
+
+  <rect x="60" y="710" width="1280" height="68" rx="14" fill="#172033"/>
+  <text x="88" y="752" style="font:700 17px system-ui,sans-serif;fill:#fff">第一期建议：</text>
+  <text x="210" y="752" style="font:16px system-ui,sans-serif;fill:#d7dcec">选择一个部门和 500–5000 份文档，先验证命中率、引用准确性与权限隔离，再逐步扩展。</text>
+</svg>
