@@ -1,0 +1,42 @@
+import enum
+import uuid
+from datetime import datetime
+
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, Enum, String, Text, func
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db import Base
+
+
+class DocumentStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    DELETING = "DELETING"
+
+
+class Document(Base):
+    __tablename__ = "documents"
+    __table_args__ = (CheckConstraint("size_bytes >= 0", name="ck_documents_size_nonnegative"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    original_name: Mapped[str] = mapped_column(String(1024))
+    stored_path: Mapped[str] = mapped_column(String(2048))
+    extension: Mapped[str] = mapped_column(String(16), index=True)
+    mime_type: Mapped[str] = mapped_column(String(255))
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
+    sha256: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    status: Mapped[DocumentStatus] = mapped_column(Enum(DocumentStatus, native_enum=False), index=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parser_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    parser_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    embedding_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    jobs: Mapped[list["ProcessingJob"]] = relationship(back_populates="document", cascade="all, delete-orphan")
+
+
+from app.models.processing_job import ProcessingJob  # noqa: E402
+
