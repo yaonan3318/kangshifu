@@ -1,7 +1,7 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
-import fitz
+import pymupdf
 import pytesseract
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
@@ -120,11 +120,10 @@ class ProcessingService:
             return "OCR_NOT_INSTALLED", "未找到本地 OCR 程序，请重新运行安装脚本", DocumentStatus.OCR_FAILED
         if isinstance(exc, pytesseract.TesseractError):
             return "OCR_FAILED", "OCR 识别失败，可以重新处理", DocumentStatus.OCR_FAILED
-        if isinstance(exc, fitz.FileDataError):
+        if isinstance(exc, pymupdf.FileDataError):
             return "CORRUPT_PDF", "PDF 文件已损坏，无法解析", DocumentStatus.PARSE_FAILED
         if str(exc) == "ENCRYPTED_PDF":
             return "ENCRYPTED_PDF", "PDF 已加密，请解密后重新上传", DocumentStatus.PARSE_FAILED
         if str(exc) == "EMPTY_CONTENT":
             return "EMPTY_CONTENT", "文档未提取到有效文字", DocumentStatus.PARSE_FAILED
         return "PARSE_FAILED", "文档解析失败，请查看本地日志", DocumentStatus.PARSE_FAILED
-

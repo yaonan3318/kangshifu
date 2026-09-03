@@ -20,8 +20,8 @@ let pollTimer: number | undefined
 
 const pages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
 
-async function refresh() {
-  loading.value = true
+async function refresh(silent = false) {
+  if (!silent) loading.value = true
   error.value = ''
   const params = new URLSearchParams({ page: String(page.value), page_size: String(pageSize) })
   if (query.value.trim()) params.set('query', query.value.trim())
@@ -33,7 +33,7 @@ async function refresh() {
   } catch (reason) {
     error.value = reason instanceof ApiError ? reason.message : '无法读取资料库'
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
   }
 }
 
@@ -42,7 +42,7 @@ watch([query, extension], () => {
   window.clearTimeout(searchTimer)
   searchTimer = window.setTimeout(refresh, 250)
 })
-watch(page, refresh)
+watch(page, () => refresh())
 
 async function remove(document: DocumentRecord) {
   if (!window.confirm(`确定删除“${document.original_name}”吗？原文件也会被删除。`)) return
@@ -58,7 +58,7 @@ async function remove(document: DocumentRecord) {
 onMounted(() => {
   refresh()
   pollTimer = window.setInterval(() => {
-    if (documents.value.some((item) => ['PENDING', 'PARSING', 'CHUNKING'].includes(item.status))) refresh()
+    if (documents.value.some((item) => ['PENDING', 'PARSING', 'CHUNKING'].includes(item.status))) refresh(true)
   }, 2000)
 })
 onUnmounted(() => window.clearInterval(pollTimer))

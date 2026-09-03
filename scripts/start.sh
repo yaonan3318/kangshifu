@@ -23,6 +23,11 @@ docker compose -f "$project_dir/docker-compose.yml" up -d db
 (cd "$project_dir/frontend" && nohup ./node_modules/.bin/vite --host 127.0.0.1 >"$run_dir/frontend.log" 2>&1 & echo $! >"$run_dir/frontend.pid")
 
 for _ in {1..30}; do
+  worker_pid="$(<"$run_dir/worker.pid")"
+  if ! kill -0 "$worker_pid" 2>/dev/null; then
+    echo "Worker exited during startup. Check $run_dir/worker.log" >&2
+    exit 1
+  fi
   if curl --fail --silent http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
     echo "Company Search is running at http://127.0.0.1:5173"
     exit 0
