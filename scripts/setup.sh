@@ -21,7 +21,7 @@ if [[ "$python_version" != "3.12" && "$python_version" != "3.13" ]]; then
   exit 1
 fi
 
-if ! python3 -c 'import shutil; raise SystemExit(0 if shutil.disk_usage.home.free >= 5 * 1024**3 else 1)'; then
+if ! python3 -c 'import shutil; from pathlib import Path; raise SystemExit(0 if shutil.disk_usage(Path.home()).free >= 5 * 1024**3 else 1)'; then
   echo "At least 5 GB of free disk space is required." >&2
   exit 1
 fi
@@ -54,4 +54,3 @@ docker compose -f "$project_dir/docker-compose.yml" exec -T db pg_isready -U com
 
 (cd "$project_dir/backend" && .venv/bin/alembic upgrade head)
 echo "Setup complete. Run ./scripts/start.sh"
-
