@@ -23,6 +23,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .drop-zone { display: grid; place-items: center; gap: 7px; min-height: 150px; border: 1.5px dashed #aeb9aa; border-radius: 16px; background: #f8faf7; color: #263a27; transition: .18s ease; }
 .drop-zone.active { border-color: #49694a; background: #edf4eb; transform: translateY(-2px); }
 .drop-zone span { color: #6d776b; font-size: 14px; }
+.upload-notice { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-top: 16px; padding: 13px 15px; border-radius: 11px; font-size: 14px; line-height: 1.55; }
+.upload-notice.is-success { background: #edf5eb; color: #315432; }
+.upload-notice.is-warning { background: #fff4dd; color: #765016; }
+.upload-notice.is-error { background: #fff0ed; color: #923d35; }
+.upload-notice button { flex: 0 0 auto; border: 0; background: transparent; color: currentColor; cursor: pointer; font-size: 21px; line-height: 1; }
 .upload-list { display: grid; gap: 10px; margin: 18px 0 0; padding: 0; list-style: none; }
 .upload-list li { display: grid; grid-template-columns: 1fr minmax(120px, 240px); gap: 18px; align-items: center; padding: 12px 4px; border-bottom: 1px solid #edf0eb; }
 .upload-copy { display: grid; gap: 4px; min-width: 0; }
@@ -61,4 +66,3 @@ td small { color: #8a9388; font-family: ui-monospace, monospace; }
   .upload-list li { grid-template-columns: 1fr; gap: 8px; }
   .drop-zone { padding: 20px; text-align: center; }
 }
-

@@ -8,6 +8,7 @@ interface QueueItem { id: string; file: File; state: QueueState; progress: numbe
 const emit = defineEmits<{ uploaded: [] }>()
 const queue = ref<QueueItem[]>([])
 const dragging = ref(false)
+const notice = ref<{ kind: 'success' | 'warning' | 'error'; message: string } | null>(null)
 let running = 0
 
 function addFiles(files: FileList | File[]) {
@@ -41,10 +42,17 @@ function runQueue() {
       item.state = 'done'
       item.progress = 100
       item.message = '等待处理'
+      notice.value = { kind: 'success', message: `“${item.file.name}”上传成功，已加入资料库。` }
       emit('uploaded')
     }).catch((error: unknown) => {
       item.state = 'failed'
       item.message = error instanceof ApiError ? error.message : '上传失败'
+      if (error instanceof ApiError && error.code === 'DUPLICATE_DOCUMENT') {
+        const existingId = typeof error.details?.document_id === 'string' ? `（文档 ID：${error.details.document_id}）` : ''
+        notice.value = { kind: 'warning', message: `“${item.file.name}”与资料库中的文件内容完全相同，未重复上传${existingId}。` }
+      } else {
+        notice.value = { kind: 'error', message: `“${item.file.name}”上传失败：${item.message}` }
+      }
     }).finally(() => {
       running -= 1
       runQueue()
@@ -62,6 +70,10 @@ function runQueue() {
     <div class="drop-zone" :class="{ active: dragging }" @dragenter.prevent="dragging = true" @dragover.prevent @dragleave.prevent="dragging = false" @drop.prevent="dropped">
       <strong>将文件拖到这里</strong><span>支持 PDF、Office、新文本与图片，单文件最大 200 MB</span>
     </div>
+    <div v-if="notice" class="upload-notice" :class="`is-${notice.kind}`" role="status" aria-live="polite">
+      <span>{{ notice.message }}</span>
+      <button type="button" aria-label="关闭提示" @click="notice = null">×</button>
+    </div>
     <ul v-if="queue.length" class="upload-list" aria-live="polite">
       <li v-for="item in queue" :key="item.id">
         <div class="upload-copy"><strong>{{ item.file.name }}</strong><span>{{ item.message }}</span></div>
@@ -70,4 +82,3 @@ function runQueue() {
     </ul>
   </section>
 </template>
-
