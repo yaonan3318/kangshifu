@@ -11,6 +11,7 @@ from app.db import Base
 
 class JobType(str, enum.Enum):
     PARSE = "PARSE"
+    INDEX = "INDEX"
 
 
 class JobStatus(str, enum.Enum):

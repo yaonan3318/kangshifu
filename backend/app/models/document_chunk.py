@@ -1,8 +1,10 @@
 import uuid
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -23,6 +25,8 @@ class DocumentChunk(Base):
     row_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
     section_path: Mapped[list[str]] = mapped_column(ARRAY(String(512)), default=list)
     content: Mapped[str] = mapped_column(Text)
+    search_vector: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(1024), nullable=True)
     ocr_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

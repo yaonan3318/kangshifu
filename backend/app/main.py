@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.documents import router as documents_router
 from app.api.health import router as health_router
+from app.api.search import router as search_router
 from app.config import Settings, get_settings
 from app.errors import AppError
 
@@ -48,8 +49,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(documents_router)
+    app.include_router(search_router)
     return app
 
 
 app = create_app()
-

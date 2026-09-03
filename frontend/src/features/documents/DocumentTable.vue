@@ -7,6 +7,7 @@ const emit = defineEmits<{ delete: [document: DocumentRecord]; view: [document: 
 
 const statusLabels: Record<DocumentRecord['status'], string> = {
   PENDING: '等待处理', PARSING: '解析中', CHUNKING: '切片中', PARSED: '已解析',
+  EMBEDDING: '向量化中', INDEXING: '建立索引', READY: '可检索', INDEX_FAILED: '索引失败',
   PARSE_FAILED: '解析失败', OCR_FAILED: 'OCR 失败', DELETING: '删除中',
 }
 

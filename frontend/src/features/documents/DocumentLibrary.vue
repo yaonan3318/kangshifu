@@ -58,7 +58,7 @@ async function remove(document: DocumentRecord) {
 onMounted(() => {
   refresh()
   pollTimer = window.setInterval(() => {
-    if (documents.value.some((item) => ['PENDING', 'PARSING', 'CHUNKING'].includes(item.status))) refresh(true)
+    if (documents.value.some((item) => ['PENDING', 'PARSING', 'CHUNKING', 'PARSED', 'EMBEDDING', 'INDEXING'].includes(item.status))) refresh(true)
   }, 2000)
 })
 onUnmounted(() => window.clearInterval(pollTimer))
@@ -66,7 +66,7 @@ onUnmounted(() => window.clearInterval(pollTimer))
 
 <template>
   <main class="app-shell">
-    <header class="hero"><p class="eyebrow">COMPANY SEARCH · LOCAL</p><h1>本地资料库</h1><p>文件只保存在这台 Mac 上。上传完成后，后续阶段将加入解析和检索。</p></header>
+    <header class="hero"><p class="eyebrow">COMPANY SEARCH · LOCAL</p><h1>本地资料库</h1><p>文件只保存在这台 Mac 上。上传后会自动完成解析、OCR、切片和本地索引。</p></header>
     <UploadQueue @uploaded="refresh" />
     <section class="library-panel" aria-labelledby="library-title">
       <div class="section-heading"><div><p class="eyebrow">LIBRARY</p><h2 id="library-title">已托管文件 <span>{{ total }}</span></h2></div></div>

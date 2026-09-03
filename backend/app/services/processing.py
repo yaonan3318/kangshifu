@@ -3,14 +3,16 @@ from datetime import UTC, datetime, timedelta
 
 import pymupdf
 import pytesseract
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.models import Document, DocumentChunk, DocumentStatus, JobStatus, ProcessingJob
+from app.models import Document, DocumentChunk, DocumentStatus, JobStatus, JobType, ProcessingJob
 from app.ocr import TesseractOcrEngine
 from app.parsers import ParserRegistry
 from app.services.chunking import chunk_blocks
+from app.services.embeddings import EmbeddingService
+from app.services.keywords import keyword_text
 from app.services.managed_storage import ManagedStorage
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,7 @@ class ProcessingService:
         self.settings = settings
         self.storage = ManagedStorage(settings)
         self.registry = ParserRegistry(TesseractOcrEngine())
+        self.embeddings = EmbeddingService(settings)
 
     def recover_stale_jobs(self) -> int:
         cutoff = datetime.now(UTC) - timedelta(minutes=self.settings.worker_stale_minutes)
@@ -32,7 +35,7 @@ class ProcessingService:
             job.error_code = "WORKER_INTERRUPTED"
             job.error_message = "后台处理被中断，已重新排队"
             if job.document.status != DocumentStatus.DELETING:
-                job.document.status = DocumentStatus.PENDING
+                job.document.status = DocumentStatus.PENDING if job.job_type == JobType.PARSE else DocumentStatus.PARSED
         self.session.commit()
         return len(jobs)
 
@@ -64,46 +67,87 @@ class ProcessingService:
             document = self.session.get(Document, job.document_id)
             if not document or document.status == DocumentStatus.DELETING:
                 return
-            document.status = DocumentStatus.PARSING
-            document.error_code = None
-            document.error_message = None
-            self.session.commit()
-
-            parser = self.registry.get(document.extension)
-            blocks = parser.parse(self.storage.resolve(document.stored_path))
-            if not blocks:
-                raise ValueError("EMPTY_CONTENT")
-
-            document.status = DocumentStatus.CHUNKING
-            self.session.commit()
-            chunks = chunk_blocks(blocks)
-            if not chunks:
-                raise ValueError("EMPTY_CONTENT")
-
-            self.session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
-            for sequence, chunk in enumerate(chunks, start=1):
-                self.session.add(DocumentChunk(
-                    document_id=document.id, sequence_number=sequence, content=chunk.content,
-                    page_start=chunk.page_start, page_end=chunk.page_end, slide_number=chunk.slide_number,
-                    sheet_name=chunk.sheet_name, row_start=chunk.row_start, row_end=chunk.row_end,
-                    section_path=chunk.section_path, ocr_confidence=chunk.ocr_confidence,
-                ))
-            document.status = DocumentStatus.PARSED
-            document.parser_name = parser.name
-            document.parser_version = parser.version
-            job = self.session.get(ProcessingJob, job.id)
-            job.status = JobStatus.SUCCEEDED
-            job.finished_at = datetime.now(UTC)
-            self.session.commit()
+            if job.job_type == JobType.INDEX:
+                self._index(document, job)
+                return
+            self._parse(document, job)
         except Exception as exc:
             self.session.rollback()
             self._mark_failed(job.id, exc)
+
+    def _parse(self, document: Document, job: ProcessingJob) -> None:
+        document.status = DocumentStatus.PARSING
+        document.error_code = None
+        document.error_message = None
+        self.session.commit()
+
+        parser = self.registry.get(document.extension)
+        blocks = parser.parse(self.storage.resolve(document.stored_path))
+        if not blocks:
+            raise ValueError("EMPTY_CONTENT")
+
+        document.status = DocumentStatus.CHUNKING
+        self.session.commit()
+        chunks = chunk_blocks(blocks)
+        if not chunks:
+            raise ValueError("EMPTY_CONTENT")
+
+        self.session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
+        for sequence, chunk in enumerate(chunks, start=1):
+            self.session.add(DocumentChunk(
+                document_id=document.id, sequence_number=sequence, content=chunk.content,
+                page_start=chunk.page_start, page_end=chunk.page_end, slide_number=chunk.slide_number,
+                sheet_name=chunk.sheet_name, row_start=chunk.row_start, row_end=chunk.row_end,
+                section_path=chunk.section_path, ocr_confidence=chunk.ocr_confidence,
+            ))
+        document.status = DocumentStatus.PARSED
+        document.parser_name = parser.name
+        document.parser_version = parser.version
+        job = self.session.get(ProcessingJob, job.id)
+        job.status = JobStatus.SUCCEEDED
+        job.finished_at = datetime.now(UTC)
+        document.jobs.append(ProcessingJob(job_type=JobType.INDEX, status=JobStatus.QUEUED))
+        self.session.commit()
+
+    def _index(self, document: Document, job: ProcessingJob) -> None:
+        chunks = list(self.session.scalars(
+            select(DocumentChunk).where(DocumentChunk.document_id == document.id).order_by(DocumentChunk.sequence_number)
+        ))
+        if not chunks:
+            raise ValueError("EMPTY_CONTENT")
+
+        document.status = DocumentStatus.EMBEDDING
+        document.error_code = None
+        document.error_message = None
+        self.session.commit()
+        vectors = self.embeddings.encode_documents([chunk.content for chunk in chunks])
+
+        document.status = DocumentStatus.INDEXING
+        self.session.commit()
+        for chunk, vector in zip(chunks, vectors, strict=True):
+            chunk.embedding = vector
+            source_text = " ".join([document.original_name, *chunk.section_path, chunk.content])
+            self.session.execute(
+                update(DocumentChunk).where(DocumentChunk.id == chunk.id).values(
+                    search_vector=func.to_tsvector("simple", keyword_text(source_text))
+                )
+            )
+        document.embedding_model = self.settings.embedding_model
+        document.embedding_version = "1"
+        document.status = DocumentStatus.READY
+        job = self.session.get(ProcessingJob, job.id)
+        job.status = JobStatus.SUCCEEDED
+        job.finished_at = datetime.now(UTC)
+        self.session.commit()
 
     def _mark_failed(self, job_id, exc: Exception) -> None:
         job = self.session.get(ProcessingJob, job_id)
         if not job:
             return
-        code, message, status = self._classify_error(exc)
+        if job.job_type == JobType.INDEX:
+            code, message, status = "INDEX_FAILED", "文档索引失败，请查看本地日志后重新处理", DocumentStatus.INDEX_FAILED
+        else:
+            code, message, status = self._classify_error(exc)
         job.status = JobStatus.FAILED
         job.error_code = code
         job.error_message = message

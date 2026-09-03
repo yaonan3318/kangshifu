@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     upload_chunk_bytes: int = 1_048_576
     worker_poll_seconds: float = 1.0
     worker_stale_minutes: int = 30
+    embedding_model: str = "BAAI/bge-m3"
+    embedding_dimension: int = 1024
+    embedding_batch_size: int = 8
+    search_candidate_limit: int = 30
+    search_rrf_k: int = 60
     bind_host: str = "127.0.0.1"
     bind_port: int = 8000
     cors_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
@@ -30,10 +35,14 @@ class Settings(BaseSettings):
     def temp_root(self) -> Path:
         return self.library_root / "temp"
 
+    @property
+    def models_root(self) -> Path:
+        return self.library_root / "models"
+
     def ensure_directories(self) -> None:
         for path in (
             self.originals_root, self.quarantine_root, self.temp_root,
-            self.library_root / "models", self.library_root / "logs", self.library_root / "backups",
+            self.models_root, self.library_root / "logs", self.library_root / "backups",
         ):
             path.mkdir(parents=True, exist_ok=True)
 

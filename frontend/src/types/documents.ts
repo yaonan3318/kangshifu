@@ -1,4 +1,4 @@
-export type DocumentStatus = 'PENDING' | 'PARSING' | 'CHUNKING' | 'PARSED' | 'PARSE_FAILED' | 'OCR_FAILED' | 'DELETING'
+export type DocumentStatus = 'PENDING' | 'PARSING' | 'CHUNKING' | 'PARSED' | 'EMBEDDING' | 'INDEXING' | 'READY' | 'INDEX_FAILED' | 'PARSE_FAILED' | 'OCR_FAILED' | 'DELETING'
 
 export interface DocumentRecord {
   id: string
