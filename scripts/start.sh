@@ -18,9 +18,21 @@ for pid_file in "$run_dir/backend.pid" "$run_dir/frontend.pid" "$run_dir/worker.
 done
 
 docker compose -f "$project_dir/docker-compose.yml" up -d db
-(cd "$project_dir/backend" && nohup .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 >"$run_dir/backend.log" 2>&1 & echo $! >"$run_dir/backend.pid")
-(cd "$project_dir/backend" && nohup .venv/bin/python -m app.worker >"$run_dir/worker.log" 2>&1 & echo $! >"$run_dir/worker.pid")
-(cd "$project_dir/frontend" && nohup ./node_modules/.bin/vite --host 127.0.0.1 >"$run_dir/frontend.log" 2>&1 & echo $! >"$run_dir/frontend.pid")
+(
+  cd "$project_dir/backend"
+  nohup .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 >"$run_dir/backend.log" 2>&1 &
+  echo $! >"$run_dir/backend.pid"
+)
+(
+  cd "$project_dir/backend"
+  nohup .venv/bin/python -m app.worker >"$run_dir/worker.log" 2>&1 &
+  echo $! >"$run_dir/worker.pid"
+)
+(
+  cd "$project_dir/frontend"
+  nohup ./node_modules/.bin/vite --host 127.0.0.1 >"$run_dir/frontend.log" 2>&1 &
+  echo $! >"$run_dir/frontend.pid"
+)
 
 for _ in {1..30}; do
   worker_pid="$(<"$run_dir/worker.pid")"
