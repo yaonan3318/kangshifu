@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     library_root: Path = Field(default_factory=lambda: Path.home() / "Library/Application Support/CompanySearch")
     max_upload_bytes: int = 209_715_200
     upload_chunk_bytes: int = 1_048_576
+    worker_poll_seconds: float = 1.0
+    worker_stale_minutes: int = 30
     bind_host: str = "127.0.0.1"
     bind_port: int = 8000
     cors_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
@@ -39,4 +41,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

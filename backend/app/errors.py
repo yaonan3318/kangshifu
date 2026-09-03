@@ -34,3 +34,7 @@ class DocumentNotFound(AppError):
     def __init__(self):
         super().__init__("DOCUMENT_NOT_FOUND", "文档不存在", 404)
 
+
+class DocumentAlreadyProcessing(AppError):
+    def __init__(self):
+        super().__init__("DOCUMENT_ALREADY_PROCESSING", "文档已经在处理队列中", 409)

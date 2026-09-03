@@ -15,6 +15,9 @@ class JobType(str, enum.Enum):
 
 class JobStatus(str, enum.Enum):
     QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
 
 
 class ProcessingJob(Base):
@@ -35,4 +38,3 @@ class ProcessingJob(Base):
 
 
 from app.models.document import Document  # noqa: E402
-

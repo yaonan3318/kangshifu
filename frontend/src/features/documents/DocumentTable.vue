@@ -3,7 +3,12 @@ import { downloadUrl } from '../../api/documents'
 import type { DocumentRecord } from '../../types/documents'
 
 defineProps<{ documents: DocumentRecord[]; loading: boolean }>()
-const emit = defineEmits<{ delete: [document: DocumentRecord] }>()
+const emit = defineEmits<{ delete: [document: DocumentRecord]; view: [document: DocumentRecord] }>()
+
+const statusLabels: Record<DocumentRecord['status'], string> = {
+  PENDING: '等待处理', PARSING: '解析中', CHUNKING: '切片中', PARSED: '已解析',
+  PARSE_FAILED: '解析失败', OCR_FAILED: 'OCR 失败', DELETING: '删除中',
+}
 
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`
@@ -27,12 +32,11 @@ function formatDate(value: string): string {
           <td><strong class="filename">{{ document.original_name }}</strong><small>{{ document.sha256.slice(0, 12) }}…</small></td>
           <td class="uppercase">{{ document.extension }}</td>
           <td>{{ formatBytes(document.size_bytes) }}</td>
-          <td><span class="status-dot"></span>{{ document.status === 'PENDING' ? '等待处理' : '删除中' }}</td>
+          <td><span class="status-dot" :class="`status-${document.status.toLowerCase()}`"></span>{{ statusLabels[document.status] }}</td>
           <td>{{ formatDate(document.created_at) }}</td>
-          <td class="row-actions"><a :href="downloadUrl(document.id)">下载</a><button type="button" class="text-danger" @click="emit('delete', document)">删除</button></td>
+          <td class="row-actions"><button type="button" @click="emit('view', document)">详情</button><a :href="downloadUrl(document.id)">下载</a><button type="button" class="text-danger" @click="emit('delete', document)">删除</button></td>
         </tr>
       </tbody>
     </table>
   </div>
 </template>
-

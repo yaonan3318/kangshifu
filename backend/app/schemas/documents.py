@@ -18,12 +18,37 @@ class DocumentResponse(BaseModel):
     status: DocumentStatus
     error_code: str | None
     error_message: str | None
+    parser_name: str | None
+    parser_version: str | None
     created_at: datetime
     updated_at: datetime
 
 
 class DocumentListResponse(BaseModel):
     items: list[DocumentResponse]
+    page: int
+    page_size: int
+    total: int
+
+
+class DocumentChunkResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    sequence_number: int
+    page_start: int | None
+    page_end: int | None
+    slide_number: int | None
+    sheet_name: str | None
+    row_start: int | None
+    row_end: int | None
+    section_path: list[str]
+    content: str
+    ocr_confidence: float | None
+
+
+class DocumentContentResponse(BaseModel):
+    items: list[DocumentChunkResponse]
     page: int
     page_size: int
     total: int
@@ -45,4 +70,3 @@ class DocumentFilters(BaseModel):
     status: DocumentStatus | None = None
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=25, ge=1, le=100)
-

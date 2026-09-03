@@ -11,6 +11,11 @@ from app.db import Base
 
 class DocumentStatus(str, enum.Enum):
     PENDING = "PENDING"
+    PARSING = "PARSING"
+    CHUNKING = "CHUNKING"
+    PARSED = "PARSED"
+    PARSE_FAILED = "PARSE_FAILED"
+    OCR_FAILED = "OCR_FAILED"
     DELETING = "DELETING"
 
 
@@ -36,7 +41,8 @@ class Document(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     jobs: Mapped[list["ProcessingJob"]] = relationship(back_populates="document", cascade="all, delete-orphan")
+    chunks: Mapped[list["DocumentChunk"]] = relationship(back_populates="document", cascade="all, delete-orphan")
 
 
 from app.models.processing_job import ProcessingJob  # noqa: E402
-
+from app.models.document_chunk import DocumentChunk  # noqa: E402

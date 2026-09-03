@@ -23,7 +23,7 @@ stop_pid() {
 }
 
 stop_pid "$run_dir/backend.pid" "uvicorn"
+stop_pid "$run_dir/worker.pid" "app.worker"
 stop_pid "$run_dir/frontend.pid" "vite"
 docker compose -f "$project_dir/docker-compose.yml" stop db
 echo "Company Search stopped."
-

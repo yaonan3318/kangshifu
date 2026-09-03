@@ -1,12 +1,12 @@
 import uuid
 
 from fastapi import UploadFile
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.errors import DocumentNotFound, DuplicateDocument
-from app.models import Document, DocumentStatus, JobStatus, JobType, ProcessingJob
+from app.errors import DocumentAlreadyProcessing, DocumentNotFound, DuplicateDocument
+from app.models import Document, DocumentChunk, DocumentStatus, JobStatus, JobType, ProcessingJob
 from app.schemas.documents import DocumentFilters
 from app.services.file_types import detect_allowed_type
 from app.services.managed_storage import ManagedStorage
@@ -94,3 +94,29 @@ class DocumentService:
             self.session.commit()
             raise
 
+    def content(self, document_id: uuid.UUID, page: int, page_size: int) -> tuple[list[DocumentChunk], int]:
+        self.get(document_id)
+        clause = DocumentChunk.document_id == document_id
+        total = self.session.scalar(select(func.count()).select_from(DocumentChunk).where(clause)) or 0
+        chunks = list(self.session.scalars(
+            select(DocumentChunk).where(clause).order_by(DocumentChunk.sequence_number)
+            .offset((page - 1) * page_size).limit(page_size)
+        ))
+        return chunks, total
+
+    def reprocess(self, document_id: uuid.UUID) -> Document:
+        document = self.get(document_id)
+        active = self.session.scalar(select(ProcessingJob.id).where(
+            ProcessingJob.document_id == document_id,
+            ProcessingJob.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
+        ))
+        if active:
+            raise DocumentAlreadyProcessing()
+        self.session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
+        document.status = DocumentStatus.PENDING
+        document.error_code = None
+        document.error_message = None
+        document.jobs.append(ProcessingJob(job_type=JobType.PARSE, status=JobStatus.QUEUED))
+        self.session.commit()
+        self.session.refresh(document)
+        return document

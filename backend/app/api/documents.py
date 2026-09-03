@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.config import Settings, get_settings
 from app.db import get_session
 from app.models.document import DocumentStatus
-from app.schemas.documents import DocumentFilters, DocumentListResponse, DocumentResponse
+from app.schemas.documents import DocumentChunkResponse, DocumentContentResponse, DocumentFilters, DocumentListResponse, DocumentResponse
 from app.services.documents import DocumentService
 from app.services.managed_storage import ManagedStorage
 
@@ -52,6 +52,28 @@ def get_document(
     return DocumentResponse.model_validate(service.get(document_id))
 
 
+@router.get("/{document_id}/content", response_model=DocumentContentResponse)
+def get_document_content(
+    document_id: uuid.UUID,
+    service: Annotated[DocumentService, Depends(get_document_service)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 25,
+) -> DocumentContentResponse:
+    chunks, total = service.content(document_id, page, page_size)
+    return DocumentContentResponse(
+        items=[DocumentChunkResponse.model_validate(chunk) for chunk in chunks],
+        page=page, page_size=page_size, total=total,
+    )
+
+
+@router.post("/{document_id}/reprocess", response_model=DocumentResponse)
+def reprocess_document(
+    document_id: uuid.UUID,
+    service: Annotated[DocumentService, Depends(get_document_service)],
+) -> DocumentResponse:
+    return DocumentResponse.model_validate(service.reprocess(document_id))
+
+
 @router.get("/{document_id}/download")
 def download_document(
     document_id: uuid.UUID,
@@ -72,4 +94,3 @@ def delete_document(
 ) -> Response:
     service.delete(document_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-

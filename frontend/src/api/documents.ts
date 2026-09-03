@@ -1,4 +1,4 @@
-import type { ApiErrorBody, DocumentList, DocumentRecord, UploadProgress } from '../types/documents'
+import type { ApiErrorBody, DocumentContent, DocumentList, DocumentRecord, UploadProgress } from '../types/documents'
 
 export class ApiError extends Error {
   constructor(public code: string, message: string, public details?: Record<string, unknown>) {
@@ -39,6 +39,14 @@ export async function listDocuments(params: URLSearchParams): Promise<DocumentLi
 
 export async function deleteDocument(id: string): Promise<void> {
   await parseResponse<void>(await fetch(`/api/documents/${id}`, { method: 'DELETE' }))
+}
+
+export async function getDocumentContent(id: string, page = 1, pageSize = 25): Promise<DocumentContent> {
+  return parseResponse(await fetch(`/api/documents/${id}/content?page=${page}&page_size=${pageSize}`))
+}
+
+export async function reprocessDocument(id: string): Promise<DocumentRecord> {
+  return parseResponse(await fetch(`/api/documents/${id}/reprocess`, { method: 'POST' }))
 }
 
 export function downloadUrl(id: string): string {

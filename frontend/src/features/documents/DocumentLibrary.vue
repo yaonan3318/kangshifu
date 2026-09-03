@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ApiError, deleteDocument, listDocuments } from '../../api/documents'
 import type { DocumentRecord } from '../../types/documents'
 import DocumentTable from './DocumentTable.vue'
+import DocumentDetail from './DocumentDetail.vue'
 import UploadQueue from './UploadQueue.vue'
 
 const documents = ref<DocumentRecord[]>([])
@@ -13,7 +14,9 @@ const query = ref('')
 const extension = ref('')
 const page = ref(1)
 const pageSize = 25
+const selectedDocument = ref<DocumentRecord | null>(null)
 let searchTimer: number | undefined
+let pollTimer: number | undefined
 
 const pages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
 
@@ -52,7 +55,13 @@ async function remove(document: DocumentRecord) {
   }
 }
 
-onMounted(refresh)
+onMounted(() => {
+  refresh()
+  pollTimer = window.setInterval(() => {
+    if (documents.value.some((item) => ['PENDING', 'PARSING', 'CHUNKING'].includes(item.status))) refresh()
+  }, 2000)
+})
+onUnmounted(() => window.clearInterval(pollTimer))
 </script>
 
 <template>
@@ -63,9 +72,9 @@ onMounted(refresh)
       <div class="section-heading"><div><p class="eyebrow">LIBRARY</p><h2 id="library-title">已托管文件 <span>{{ total }}</span></h2></div></div>
       <div class="filters"><label><span>文件名</span><input v-model="query" type="search" placeholder="输入文件名"></label><label><span>类型</span><select v-model="extension"><option value="">全部类型</option><option v-for="type in ['pdf','docx','xlsx','pptx','txt','md','csv','png','jpg']" :key="type" :value="type">{{ type.toUpperCase() }}</option></select></label></div>
       <p v-if="error" class="error" role="alert">{{ error }}</p>
-      <DocumentTable :documents="documents" :loading="loading" @delete="remove" />
+      <DocumentTable :documents="documents" :loading="loading" @delete="remove" @view="selectedDocument = $event" />
       <nav v-if="pages > 1" class="pagination" aria-label="分页"><button :disabled="page === 1" @click="page--">上一页</button><span>第 {{ page }} / {{ pages }} 页</span><button :disabled="page === pages" @click="page++">下一页</button></nav>
     </section>
+    <DocumentDetail v-if="selectedDocument" :document="selectedDocument" @close="selectedDocument = null" @changed="refresh" />
   </main>
 </template>
-

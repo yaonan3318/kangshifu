@@ -30,7 +30,9 @@ if ! command -v brew >/dev/null 2>&1; then
   echo "Homebrew is required to install libmagic: https://brew.sh" >&2
   exit 1
 fi
-brew list libmagic >/dev/null 2>&1 || brew install libmagic
+for formula in libmagic tesseract tesseract-lang; do
+  brew list "$formula" >/dev/null 2>&1 || brew install "$formula"
+done
 
 python3 -m venv "$project_dir/backend/.venv"
 "$project_dir/backend/.venv/bin/python" -m pip install --upgrade pip
@@ -53,4 +55,8 @@ done
 docker compose -f "$project_dir/docker-compose.yml" exec -T db pg_isready -U company_search -d company_search >/dev/null
 
 (cd "$project_dir/backend" && .venv/bin/alembic upgrade head)
+if ! tesseract --list-langs 2>/dev/null | grep -qx "chi_sim"; then
+  echo "Simplified Chinese OCR language chi_sim is unavailable after installing tesseract-lang." >&2
+  exit 1
+fi
 echo "Setup complete. Run ./scripts/start.sh"
