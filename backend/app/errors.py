@@ -1,7 +1,10 @@
+"""应用可预期的业务异常；API 层会把它们统一序列化为错误 JSON。"""
+
 from typing import Any
 
 
 class AppError(Exception):
+    """携带稳定错误码、用户提示、HTTP 状态码及可选详情的基础异常。"""
     def __init__(self, code: str, message: str, status_code: int, details: dict[str, Any] | None = None):
         super().__init__(message)
         self.code = code

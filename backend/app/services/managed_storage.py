@@ -1,3 +1,5 @@
+"""受管文件存储：安全暂存上传流、计算哈希并原子移动到资料目录。"""
+
 import hashlib
 import os
 import uuid
@@ -12,6 +14,8 @@ from app.errors import EmptyUpload, UploadTooLarge
 
 @dataclass(frozen=True)
 class StagedFile:
+    """尚未正式入库的临时文件及上传过程中计算出的元数据。"""
+
     temp_path: Path
     original_name: str
     size_bytes: int
@@ -19,10 +23,13 @@ class StagedFile:
 
 
 class ManagedStorage:
+    """管理配置目录内的附件；原始文件本身不会保存到 PostgreSQL。"""
+
     def __init__(self, settings: Settings):
         self.settings = settings
 
     def stage(self, stream: BinaryIO, original_name: str) -> StagedFile:
+        """分块写临时文件，同时限制大小并计算用于内容去重的 SHA-256。"""
         self.settings.ensure_directories()
         safe_name = Path(original_name.replace("\\", "/")).name.strip()
         if not safe_name or len(safe_name) > 1024 or any(ord(char) < 32 for char in safe_name):

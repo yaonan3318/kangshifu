@@ -1,3 +1,5 @@
+"""文档处理状态机：解析、OCR、切片、向量化并建立全文检索索引。"""
+
 import logging
 from datetime import UTC, datetime, timedelta
 
@@ -19,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 class ProcessingService:
+    """由独立 Worker 调用的耗时任务服务，不阻塞 FastAPI 请求线程。"""
+
     def __init__(self, session: Session, settings: Settings):
         self.session = session
         self.settings = settings
@@ -27,6 +31,7 @@ class ProcessingService:
         self.embeddings = EmbeddingService(settings)
 
     def recover_stale_jobs(self) -> int:
+        """把 Worker 异常退出后遗留的 RUNNING 任务恢复到待处理队列。"""
         cutoff = datetime.now(UTC) - timedelta(minutes=self.settings.worker_stale_minutes)
         jobs = list(self.session.scalars(select(ProcessingJob).where(ProcessingJob.status == JobStatus.RUNNING, ProcessingJob.started_at < cutoff)))
         for job in jobs:
@@ -40,6 +45,7 @@ class ProcessingService:
         return len(jobs)
 
     def claim_next_job(self) -> ProcessingJob | None:
+        """使用行锁领取一个任务；skip_locked 为多 Worker 并行预留能力。"""
         job = self.session.scalar(
             select(ProcessingJob).where(ProcessingJob.status == JobStatus.QUEUED)
             .order_by(ProcessingJob.created_at, ProcessingJob.id).with_for_update(skip_locked=True).limit(1)
@@ -63,6 +69,7 @@ class ProcessingService:
         return job
 
     def process(self, job: ProcessingJob) -> None:
+        """按任务类型执行解析或索引，并将异常转换成可展示的失败状态。"""
         try:
             document = self.session.get(Document, job.document_id)
             if not document or document.status == DocumentStatus.DELETING:
@@ -76,6 +83,7 @@ class ProcessingService:
             self._mark_failed(job.id, exc)
 
     def _parse(self, document: Document, job: ProcessingJob) -> None:
+        """从磁盘解析附件，把统一文本块切片后写入 PostgreSQL。"""
         document.status = DocumentStatus.PARSING
         document.error_code = None
         document.error_message = None
@@ -110,6 +118,7 @@ class ProcessingService:
         self.session.commit()
 
     def _index(self, document: Document, job: ProcessingJob) -> None:
+        """给数据库片段生成 BGE 向量和 tsvector，完成后标记为 READY。"""
         chunks = list(self.session.scalars(
             select(DocumentChunk).where(DocumentChunk.document_id == document.id).order_by(DocumentChunk.sequence_number)
         ))
@@ -120,6 +129,7 @@ class ProcessingService:
         document.error_code = None
         document.error_message = None
         self.session.commit()
+        # 此处读取数据库中的片段；后续检索同样不需要再次打开原始附件。
         vectors = self.embeddings.encode_documents([chunk.content for chunk in chunks])
 
         document.status = DocumentStatus.INDEXING

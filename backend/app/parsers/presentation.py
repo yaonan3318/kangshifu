@@ -1,3 +1,5 @@
+"""PPTX 解析器：按幻灯片提取文本框与表格内容。"""
+
 from pathlib import Path
 
 from pptx import Presentation
@@ -34,4 +36,3 @@ class PptxParser:
                 title = slide.shapes.title.text.strip() if slide.shapes.title and slide.shapes.title.text else f"幻灯片 {slide_number}"
                 blocks.append(ParsedBlock(content="\n".join(texts), slide_number=slide_number, section_path=[title]))
         return blocks
-

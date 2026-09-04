@@ -1,3 +1,5 @@
+"""混合检索服务：融合 PostgreSQL 全文关键词召回与 pgvector 语义召回。"""
+
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 import uuid
@@ -14,17 +16,22 @@ from app.services.keywords import keyword_text
 
 @dataclass
 class Candidate:
+    """检索内部使用的片段及其所属文档。"""
+
     chunk: DocumentChunk
     document: Document
 
 
 class SearchService:
+    """执行关键词与语义两路召回，再用 RRF 融合成一个结果列表。"""
+
     def __init__(self, session: Session, settings: Settings):
         self.session = session
         self.settings = settings
         self.embeddings = EmbeddingService(settings)
 
     def search(self, request: SearchRequest) -> list[SearchResult]:
+        """检索已完成索引的片段，并返回去重、融合排序后的结果。"""
         query = request.query.strip()
         if not query:
             return []
@@ -34,6 +41,7 @@ class SearchService:
         candidates: dict[uuid.UUID, Candidate] = {}
         scores: dict[uuid.UUID, float] = {}
         sources: dict[uuid.UUID, set[str]] = {}
+        # RRF 只使用各召回列表的名次，不必强行比较两种不同量纲的原始分数。
         for source, ranked in (("keyword", keyword_candidates), ("vector", vector_candidates)):
             for rank, candidate in enumerate(ranked, start=1):
                 chunk_id = candidate.chunk.id
@@ -57,6 +65,7 @@ class SearchService:
         return clauses
 
     def _keyword_candidates(self, query: str, request: SearchRequest) -> list[Candidate]:
+        """通过 GIN + tsvector 精确召回，适合名称、编号等明确关键词。"""
         tokens = keyword_text(query)
         if not tokens:
             return []
@@ -71,6 +80,7 @@ class SearchService:
         return [Candidate(chunk=row[0], document=row[1]) for row in rows]
 
     def _vector_candidates(self, query: str, request: SearchRequest) -> list[Candidate]:
+        """通过 pgvector 余弦距离语义召回，并过滤低相似度噪声。"""
         vector = self.embeddings.encode_query(query)
         distance = DocumentChunk.embedding.cosine_distance(vector)
         maximum_distance = 1.0 - self.settings.search_vector_min_similarity

@@ -1,3 +1,5 @@
+"""混合检索 HTTP 接口。"""
+
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -17,5 +19,6 @@ def search_documents(
     session: Annotated[Session, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> SearchResponse:
+    """按关键词与语义向量同时检索已完成索引的文档片段。"""
     items = SearchService(session, settings).search(request)
     return SearchResponse(query=request.query.strip(), items=items, total=len(items))

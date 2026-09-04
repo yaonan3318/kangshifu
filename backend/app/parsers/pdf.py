@@ -1,3 +1,5 @@
+"""PDF 解析器：优先读取文字层，扫描页无文字时回退到 OCR。"""
+
 from pathlib import Path
 
 import pymupdf

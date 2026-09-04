@@ -1,3 +1,5 @@
+"""文件类型安全校验：组合扩展名、MIME 嗅探和 OOXML 包结构判断。"""
+
 from dataclasses import dataclass
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
@@ -76,4 +78,3 @@ def detect_allowed_type(path: Path, original_name: str) -> DetectedFileType:
     if detected_mime not in SIMPLE_TYPES[extension]:
         raise UnsupportedFileType("文件内容与扩展名不匹配")
     return DetectedFileType("jpg" if extension == "jpeg" else extension, detected_mime)
-

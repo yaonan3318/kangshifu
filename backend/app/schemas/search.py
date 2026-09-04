@@ -1,3 +1,5 @@
+"""混合检索的筛选条件、命中片段和响应结构。"""
+
 import uuid
 from datetime import date
 

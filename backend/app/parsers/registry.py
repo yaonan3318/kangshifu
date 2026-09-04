@@ -1,3 +1,5 @@
+"""解析器注册表：根据已经验证过的文件扩展名选择实现。"""
+
 from app.ocr.base import OcrEngine
 from app.parsers.base import DocumentParser
 from app.parsers.docx import DocxParser
@@ -9,6 +11,7 @@ from app.parsers.text import TextParser
 
 
 class ParserRegistry:
+    """集中维护扩展名到解析器实例的映射，避免业务层出现格式判断链。"""
     def __init__(self, ocr: OcrEngine):
         self.parsers: dict[str, DocumentParser] = {
             "pdf": PdfParser(ocr),
@@ -27,4 +30,3 @@ class ParserRegistry:
             return self.parsers[extension.lower()]
         except KeyError:
             raise ValueError(f"UNSUPPORTED_PARSER:{extension}") from None
-

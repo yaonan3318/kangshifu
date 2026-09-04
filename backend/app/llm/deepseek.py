@@ -1,3 +1,5 @@
+"""DeepSeek Chat Completions 客户端，仅在用户主动打开增强开关时调用。"""
+
 import json
 from collections.abc import AsyncIterator
 
@@ -8,15 +10,18 @@ from app.llm.base import GenerationMessage, LlmAuthenticationFailed, LlmRateLimi
 
 
 class DeepSeekClient:
+    """封装鉴权、超时、限流以及流式文本解析，失败时由 RAG 层降级。"""
     def __init__(self, settings: Settings):
         self.settings = settings
         self.base_url = settings.deepseek_base_url.rstrip("/")
 
     @property
     def configured(self) -> bool:
+        """只判断 API Key 是否存在，不发出任何网络请求。"""
         return bool(self.settings.deepseek_api_key.strip())
 
     async def stream(self, messages: list[GenerationMessage]) -> AsyncIterator[str]:
+        """调用 DeepSeek 并逐段产生文本，将 HTTP 错误转换成稳定业务异常。"""
         if not self.configured:
             raise LlmUnavailable("DEEPSEEK_NOT_CONFIGURED", "尚未配置 DeepSeek API Key，本次使用本地模型回答。")
         payload = {

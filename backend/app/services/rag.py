@@ -1,3 +1,5 @@
+"""RAG 编排层：检索证据、构造提示词、调用千问，并可选调用 DeepSeek 增强。"""
+
 from collections.abc import AsyncIterator
 
 from sqlalchemy.orm import Session
@@ -15,6 +17,8 @@ NO_INTERNAL_ANSWER = "公司资料库中没有找到能够回答这个问题的�
 
 
 class RagService:
+    """把检索和两种 LLM 串联成可降级、可显示引用的流式问答。"""
+
     def __init__(self, session: Session, settings: Settings):
         self.settings = settings
         self.search_service = SearchService(session, settings)
@@ -22,6 +26,7 @@ class RagService:
         self.deepseek = DeepSeekClient(settings)
 
     async def status(self) -> AnswerStatusResponse:
+        """返回本地模型是否就绪以及 DeepSeek 是否配置。"""
         return AnswerStatusResponse(
             ollama=await self.ollama.status(),
             deepseek_configured=self.deepseek.configured,
@@ -29,6 +34,7 @@ class RagService:
         )
 
     async def stream(self, request: AnswerRequest) -> AsyncIterator[AnswerEvent]:
+        """逐阶段产生 SSE 事件；DeepSeek 失败时保留已生成的本地答案。"""
         yield AnswerEvent(type="stage", stage="retrieving")
         results = self.search_service.search(self._search_request(request))
         sources = self._sources(results)
@@ -36,6 +42,7 @@ class RagService:
         scope = self._internal_scope(results)
 
         local_answer = ""
+        # 无内部证据时禁止千问凭训练知识冒充公司资料回答。
         if sources:
             yield AnswerEvent(type="stage", stage="local_generating")
             try:
@@ -51,6 +58,7 @@ class RagService:
 
         provider = AnswerProvider.LOCAL
         deepseek_used = False
+        # API Key 存在并不等于自动上传资料；本次请求必须显式打开增强开关。
         if request.use_deepseek:
             if not self.deepseek.configured:
                 yield AnswerEvent(
@@ -91,6 +99,7 @@ class RagService:
         )
 
     def _sources(self, results: list[SearchResult]) -> list[AnswerSource]:
+        """对命中片段去重并按字符预算裁剪，控制模型上下文大小。"""
         sources: list[AnswerSource] = []
         used_chars = 0
         seen = set()
@@ -137,6 +146,7 @@ class RagService:
     def _local_messages(
         self, request: AnswerRequest, sources: list[AnswerSource], scope: KnowledgeScope,
     ) -> list[GenerationMessage]:
+        """构造只允许依据内部证据、并要求使用 [n] 引用的千问提示词。"""
         evidence = self._format_evidence(sources)
         system = (
             "你是公司内部知识助手。请用中文直接回答，只能把给出的内部资料作为公司事实依据。"
@@ -152,6 +162,7 @@ class RagService:
     def _deepseek_messages(
         self, request: AnswerRequest, sources: list[AnswerSource], local_answer: str,
     ) -> list[GenerationMessage]:
+        """有证据时合并初稿；无证据时要求明确标记为通用知识。"""
         if sources:
             system = (
                 "你是公司知识答案编辑。根据内部资料和千问初稿生成一份统一、准确的中文答案。"

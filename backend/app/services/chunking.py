@@ -1,3 +1,5 @@
+"""文本清洗与切片：控制片段长度，并用重叠内容保留跨片段语义。"""
+
 import re
 from dataclasses import replace
 
@@ -68,4 +70,3 @@ def chunk_blocks(blocks: list[ParsedBlock], target: int = 800, maximum: int = 12
             buffer = block
     flush()
     return output
-

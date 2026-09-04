@@ -1,3 +1,5 @@
+"""DOCX 解析器：提取段落、标题层级和表格文字。"""
+
 from pathlib import Path
 
 from docx import Document as WordDocument
@@ -6,6 +8,7 @@ from app.parsers.base import ParsedBlock
 
 
 class DocxParser:
+    """使用 python-docx 把 Word 内容转换成统一 ParsedBlock。"""
     name = "python-docx"
     version = "1"
 
@@ -37,4 +40,3 @@ class DocxParser:
                 if fields:
                     blocks.append(ParsedBlock(content="；".join(fields), section_path=[*headings, f"表格 {table_number}"], row_start=row_number, row_end=row_number))
         return blocks
-

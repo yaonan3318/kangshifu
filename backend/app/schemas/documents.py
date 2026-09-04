@@ -1,3 +1,5 @@
+"""文档 API 的 Pydantic 请求/响应结构，隔离 HTTP 数据与 ORM 对象。"""
+
 import uuid
 from datetime import datetime
 

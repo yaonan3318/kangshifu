@@ -1,3 +1,5 @@
+"""解析后的文档片段模型，同时保存全文索引向量与 1024 维语义向量。"""
+
 import uuid
 from datetime import datetime
 
@@ -11,6 +13,7 @@ from app.db import Base
 
 
 class DocumentChunk(Base):
+    """检索的最小单位，保留页码/工作表等位置以支持答案引用。"""
     __tablename__ = "document_chunks"
     __table_args__ = (UniqueConstraint("document_id", "sequence_number", name="uq_chunk_document_sequence"),)
 

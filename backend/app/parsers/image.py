@@ -1,3 +1,5 @@
+"""PNG/JPEG 图片解析器：把整张图片交给本地 OCR。"""
+
 from pathlib import Path
 
 from PIL import Image
@@ -17,4 +19,3 @@ class ImageParser:
         with Image.open(path) as image:
             result = self.ocr.recognize(image)
         return [ParsedBlock(content=result.text, ocr_confidence=result.confidence)] if result.text.strip() else []
-

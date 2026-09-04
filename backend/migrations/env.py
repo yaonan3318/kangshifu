@@ -1,3 +1,5 @@
+"""Alembic 运行入口：加载 ORM 元数据并支持离线/在线数据库迁移。"""
+
 from logging.config import fileConfig
 
 from alembic import context
@@ -29,4 +31,3 @@ def run_migrations_online() -> None:
 
 
 run_migrations_offline() if context.is_offline_mode() else run_migrations_online()
-

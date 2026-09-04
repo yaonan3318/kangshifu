@@ -1,3 +1,5 @@
+"""TXT/Markdown 解析器：检测编码并按标题或文本段落提取内容。"""
+
 import re
 from pathlib import Path
 
@@ -40,4 +42,3 @@ class TextParser:
                 paragraphs.append(stripped)
         flush()
         return blocks
-

@@ -1,3 +1,5 @@
+"""集中定义应用配置，并把 ``COMPANY_SEARCH_`` 环境变量映射为 Python 属性。"""
+
 from functools import lru_cache
 from pathlib import Path
 
@@ -6,6 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """运行配置；默认值适合单机 Mac，可由 backend/.env 或环境变量覆盖。"""
     model_config = SettingsConfigDict(env_prefix="COMPANY_SEARCH_", env_file=".env", extra="ignore")
 
     database_url: str = "postgresql+psycopg://company_search:company_search@127.0.0.1:54329/company_search"
@@ -61,4 +64,5 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    """返回进程内复用的配置对象，避免每次依赖注入都重新读取环境变量。"""
     return Settings()

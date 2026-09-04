@@ -1,3 +1,5 @@
+"""文档业务服务：协调数据库元数据、磁盘文件和后台处理任务。"""
+
 import uuid
 
 from fastapi import UploadFile
@@ -13,15 +15,19 @@ from app.services.managed_storage import ManagedStorage
 
 
 class DocumentService:
+    """实现文档用例，并保证数据库记录和受管磁盘文件尽量保持一致。"""
+
     def __init__(self, session: Session, storage: ManagedStorage):
         self.session = session
         self.storage = storage
 
     def upload(self, file: UploadFile) -> Document:
+        """暂存并校验文件，按 SHA-256 去重，入库后创建异步解析任务。"""
         staged = self.storage.stage(file.file, file.filename or "")
         promoted_path: str | None = None
         try:
             file_type = detect_allowed_type(staged.temp_path, staged.original_name)
+            # 内容哈希比文件名可靠：同一内容即使改名也不会重复占用磁盘。
             duplicate = self.session.scalar(select(Document).where(Document.sha256 == staged.sha256))
             if duplicate:
                 raise DuplicateDocument(str(duplicate.id))

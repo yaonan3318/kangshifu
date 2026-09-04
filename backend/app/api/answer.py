@@ -1,3 +1,5 @@
+"""RAG 问答接口，以 Server-Sent Events (SSE) 持续推送生成结果。"""
+
 import logging
 from typing import Annotated
 
@@ -18,15 +20,18 @@ def get_rag_service(
     session: Annotated[Session, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> RagService:
+    """为当前请求创建 RAG 编排服务，并复用请求级数据库 Session。"""
     return RagService(session, settings)
 
 
 def encode_sse(event: AnswerEvent) -> str:
+    """把 Pydantic 事件编码成浏览器 EventSource/fetch 可读取的 SSE 帧。"""
     return f"event: {event.type}\ndata: {event.model_dump_json()}\n\n"
 
 
 @router.get("/status", response_model=AnswerStatusResponse)
 async def answer_status(service: Annotated[RagService, Depends(get_rag_service)]) -> AnswerStatusResponse:
+    """检查本地 Ollama 模型是否就绪以及 DeepSeek 是否已配置。"""
     return await service.status()
 
 
@@ -36,7 +41,9 @@ async def answer_stream(
     request: Request,
     service: Annotated[RagService, Depends(get_rag_service)],
 ) -> StreamingResponse:
+    """先检索内部资料，再流式返回千问答案，并按需用 DeepSeek 替换增强答案。"""
     async def events():
+        # 客户端关闭页面后尽快停止生成，避免模型继续占用计算资源。
         try:
             async for event in service.stream(body):
                 if await request.is_disconnected():

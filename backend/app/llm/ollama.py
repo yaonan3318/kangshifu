@@ -1,3 +1,5 @@
+"""本地 Ollama HTTP 客户端，用于调用 qwen3:8b 并解析流式响应。"""
+
 import json
 from collections.abc import AsyncIterator
 
@@ -9,11 +11,13 @@ from app.schemas.answer import OllamaStatus
 
 
 class OllamaClient:
+    """封装 Ollama 状态探测和聊天生成，避免 RAG 层依赖具体 HTTP 格式。"""
     def __init__(self, settings: Settings):
         self.settings = settings
         self.base_url = settings.ollama_base_url.rstrip("/")
 
     async def status(self) -> OllamaStatus:
+        """探测 Ollama 服务是否可达以及配置的模型是否已经下载。"""
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(f"{self.base_url}/api/tags")
@@ -26,6 +30,7 @@ class OllamaClient:
             return OllamaStatus(reachable=False, model=self.settings.ollama_model, installed=False)
 
     async def stream(self, messages: list[GenerationMessage]) -> AsyncIterator[str]:
+        """逐段返回本地模型输出；keep_alive=0 会在回答后释放模型运行内存。"""
         payload = {
             "model": self.settings.ollama_model,
             "messages": [message.model_dump() for message in messages],

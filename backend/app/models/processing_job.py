@@ -1,3 +1,5 @@
+"""数据库任务队列模型，负责把上传请求与耗时解析/索引工作解耦。"""
+
 import enum
 import uuid
 from datetime import datetime
@@ -10,11 +12,13 @@ from app.db import Base
 
 
 class JobType(str, enum.Enum):
+    """PARSE 提取并切片，INDEX 生成关键词索引和语义向量。"""
     PARSE = "PARSE"
     INDEX = "INDEX"
 
 
 class JobStatus(str, enum.Enum):
+    """后台任务的领取和执行状态。"""
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
@@ -22,6 +26,7 @@ class JobStatus(str, enum.Enum):
 
 
 class ProcessingJob(Base):
+    """可恢复的后台任务记录；Worker 重启后可继续处理未完成任务。"""
     __tablename__ = "processing_jobs"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

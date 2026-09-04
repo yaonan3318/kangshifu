@@ -1,3 +1,5 @@
+"""文档元数据 ORM 模型；原文件在磁盘，数据库保存路径、状态和索引信息。"""
+
 import enum
 import uuid
 from datetime import datetime
@@ -10,6 +12,7 @@ from app.db import Base
 
 
 class DocumentStatus(str, enum.Enum):
+    """文档从上传到可检索的状态机，以及解析/OCR/索引失败状态。"""
     PENDING = "PENDING"
     PARSING = "PARSING"
     CHUNKING = "CHUNKING"
@@ -24,6 +27,7 @@ class DocumentStatus(str, enum.Enum):
 
 
 class Document(Base):
+    """一份受管文档；与文本片段和后台任务是一对多关系。"""
     __tablename__ = "documents"
     __table_args__ = (CheckConstraint("size_bytes >= 0", name="ck_documents_size_nonnegative"),)
 

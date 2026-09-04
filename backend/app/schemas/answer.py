@@ -1,4 +1,7 @@
+"""RAG 问答请求、运行状态、引用来源和 SSE 事件的数据契约。"""
+
 import uuid
+
 from datetime import date
 from enum import Enum
 from typing import Any, Literal

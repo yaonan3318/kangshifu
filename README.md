@@ -98,6 +98,8 @@ http://127.0.0.1:5173
 http://127.0.0.1:8000/docs
 ```
 
+同时提供 ReDoc（`http://127.0.0.1:8000/redoc`）和 OpenAPI JSON（`http://127.0.0.1:8000/openapi.json`）。请求参数、响应结构、SSE 事件、curl 示例及 Nginx 注意事项见 [后端接口手册](docs/backend-api.md)。
+
 主要接口：
 
 ```text

@@ -1,3 +1,5 @@
+"""XLSX/CSV 解析器：按工作表和行批次产生带位置的文本块。"""
+
 import csv
 from pathlib import Path
 from typing import Iterable
@@ -64,4 +66,3 @@ class CsvParser:
             if content:
                 blocks.append(ParsedBlock(content=content, sheet_name="CSV", row_start=row_number, row_end=row_number, section_path=["CSV"] ))
         return blocks
-
