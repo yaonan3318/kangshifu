@@ -195,6 +195,7 @@ onBeforeUnmount(stop)
       <div v-if="!messages.length" class="answer-welcome">
         <strong>可以从一个具体问题开始</strong>
         <p>例如：“公司目前采用什么气泡检测方案？”或“Go 服务如何部署到 K8s？”</p>
+      </div>
       <article v-for="message in messages" :key="message.id" class="answer-turn">
         <div class="user-message"><span>你</span><p>{{ message.question }}</p></div>
         <div class="assistant-message">
