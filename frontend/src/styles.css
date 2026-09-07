@@ -75,6 +75,27 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .deepseek-toggle span::after { position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: white; content: ""; transition: .18s; }
 .deepseek-toggle input:checked + span { background: #365b38; }
 .deepseek-toggle input:checked + span::after { transform: translateX(15px); }
+.answer-switches { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; }
+.harness-environment { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-top: 11px; padding: 11px; border: 1px solid #d6ddd3; border-radius: 12px; background: #f5f8f3; }
+.harness-environment label { display: grid; min-width: 210px; gap: 5px; color: #536252; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.harness-environment select, .harness-approval input { min-height: 38px; border: 1px solid #c8d2c5; border-radius: 8px; background: white; padding: 0 10px; color: #1d2b20; font: inherit; }
+.harness-environment small { color: #914a3d; }
+.harness-yaml-input { margin-top: 10px; color: #536252; font-size: 12px; }.harness-yaml-input textarea { width: 100%; margin-top: 8px; resize: vertical; border: 1px solid #ccd5c9; border-radius: 9px; padding: 10px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.harness-timeline { margin-top: 14px; border: 1px solid #d8dfd5; border-radius: 12px; background: #f8faf7; overflow: hidden; }
+.harness-timeline > header { display: flex; justify-content: space-between; padding: 11px 13px; border-bottom: 1px solid #e1e6df; color: #405240; font-size: 12px; }
+.harness-timeline ol { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.harness-timeline li { display: grid; grid-template-columns: 15px 1fr; gap: 9px; padding: 10px 13px; border-bottom: 1px solid #e6ebe4; }
+.harness-timeline li:last-child { border-bottom: 0; }
+.step-dot { width: 9px; height: 9px; margin-top: 4px; border-radius: 50%; background: #aab5a7; }
+.is-running .step-dot { background: #d49a3b; animation: answer-pulse 1s infinite alternate; }
+.is-succeeded .step-dot { background: #4d8152; }.is-failed .step-dot { background: #b55245; }.is-awaiting .step-dot { background: #d36c36; }
+.harness-timeline li div { min-width: 0; }.harness-timeline li small { display: block; margin-top: 2px; color: #768274; }
+.harness-timeline details, .harness-approval details { margin-top: 8px; }.harness-timeline pre, .harness-approval pre { max-height: 260px; overflow: auto; white-space: pre-wrap; font-size: 11px; }
+.harness-approval { margin-top: 14px; padding: 16px; border: 2px solid #c7694f; border-radius: 14px; background: #fff9f5; box-shadow: 0 8px 24px rgba(123,55,38,.08); }
+.harness-approval .danger-label { margin: 0; color: #a34432; font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.harness-approval h3 { margin: 6px 0 12px; }.harness-approval dl { display: flex; flex-wrap: wrap; gap: 12px; }.harness-approval dl div { min-width: 150px; }.harness-approval dt { color: #7a8378; font-size: 10px; text-transform: uppercase; }.harness-approval dd { margin: 3px 0 0; font-weight: 700; }
+.harness-approval > label { display: grid; gap: 6px; margin-top: 14px; color: #5b3a31; font-size: 12px; }
+.approval-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 12px; }.approval-actions button { border: 0; border-radius: 9px; background: #9b4334; color: white; padding: 10px 15px; cursor: pointer; }.approval-actions button.reject { background: transparent; border: 1px solid #b8a49d; color: #70483e; }.approval-actions button:disabled { opacity: .4; cursor: default; }
 .privacy-hint { margin: 8px 0; color: #806027; font-size: 12px; }
 .privacy-hint strong { display: block; margin-top: 3px; }
 .answer-composer form { display: grid; grid-template-columns: 1fr auto; gap: 10px; margin-top: 10px; }

@@ -11,6 +11,7 @@ from app.config import Settings, get_settings
 from app.db import get_session
 from app.schemas.answer import AnswerEvent, AnswerRequest, AnswerStatusResponse
 from app.services.rag import RagService
+from app.services.harness import HarnessService
 
 router = APIRouter(prefix="/api/answer", tags=["answer"])
 logger = logging.getLogger(__name__)
@@ -45,7 +46,8 @@ async def answer_stream(
     async def events():
         # 客户端关闭页面后尽快停止生成，避免模型继续占用计算资源。
         try:
-            async for event in service.stream(body):
+            stream = HarnessService(service.search_service.session, service.settings).start(body) if body.use_harness else service.stream(body)
+            async for event in stream:
                 if await request.is_disconnected():
                     return
                 yield encode_sse(event)

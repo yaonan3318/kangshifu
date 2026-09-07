@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     rag_source_limit: int = 6
     rag_history_turns: int = 6
     rag_max_context_chars: int = 18_000
+    k8s_allowed_contexts: str = ""
+    harness_max_steps: int = 8
+    harness_timeout_seconds: int = 300
+    harness_read_timeout_seconds: int = 30
+    harness_write_timeout_seconds: int = 300
+    harness_approval_minutes: int = 10
+    harness_audit_days: int = 30
+    harness_max_tool_output_chars: int = 20_000
     bind_host: str = "127.0.0.1"
     bind_port: int = 8000
     cors_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
@@ -53,6 +61,11 @@ class Settings(BaseSettings):
     @property
     def models_root(self) -> Path:
         return self.library_root / "models"
+
+    @property
+    def allowed_k8s_contexts(self) -> list[str]:
+        """返回管理员明确授权给 Harness 使用的 Kubernetes context。"""
+        return list(dict.fromkeys(item.strip() for item in self.k8s_allowed_contexts.split(",") if item.strip()))
 
     def ensure_directories(self) -> None:
         for path in (

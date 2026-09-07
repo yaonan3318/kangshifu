@@ -88,4 +88,9 @@ if ! command -v ollama >/dev/null 2>&1; then
 else
   echo "Run ./scripts/check-llm.sh to verify the local Qwen model."
 fi
+if ! command -v kubectl >/dev/null 2>&1; then
+  echo "kubectl is not installed; normal RAG works, but Kubernetes Harness tools will be unavailable."
+else
+  echo "kubectl is available. Harness remains disabled until allowed contexts are configured in backend/.env."
+fi
 echo "Setup complete. Run ./scripts/start.sh"

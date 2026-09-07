@@ -1,11 +1,22 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ApiError } from '../../api/documents'
 import { getAnswerStatus, streamAnswer } from '../../api/answer'
 import type { AnswerMessage, AnswerSource, AnswerStatus } from '../../types/answer'
+import { confirmApproval, getHarnessStatus, getHarnessTask, getNamespaces, rejectApproval, resumeHarness } from '../../api/harness'
+import type { HarnessStatus } from '../../types/harness'
+import HarnessTimeline from './HarnessTimeline.vue'
+import HarnessApproval from './HarnessApproval.vue'
 
 const question = ref('')
 const useDeepseek = ref(false)
+const useHarness = ref(false)
+const harnessStatus = ref<HarnessStatus | null>(null)
+const selectedContext = ref('')
+const selectedNamespace = ref('default')
+const namespaces = ref<string[]>([])
+const approvalBusy = ref(false)
+const deploymentYaml = ref('')
 const status = ref<AnswerStatus | null>(null)
 const statusError = ref('')
 const messages = ref<AnswerMessage[]>([])
@@ -21,11 +32,40 @@ const stageLabels = {
 async function loadStatus() {
   try {
     status.value = await getAnswerStatus()
+    harnessStatus.value = await getHarnessStatus()
+    if (!selectedContext.value && harnessStatus.value.contexts.length) selectedContext.value = harnessStatus.value.contexts[0]
+    await restorePendingTask()
     statusError.value = ''
   } catch (reason) {
     statusError.value = reason instanceof ApiError ? reason.message : '无法检查本地模型状态'
   }
 }
+
+async function restorePendingTask() {
+  const taskId = localStorage.getItem('company-search-pending-harness-task')
+  if (!taskId || messages.value.some((item) => item.harnessTaskId === taskId)) return
+  try {
+    const task = await getHarnessTask(taskId)
+    const pending = task.approvals.find((item) => item.status === 'PENDING') ?? null
+    if (!pending) { localStorage.removeItem('company-search-pending-harness-task'); return }
+    messages.value.push(reactive<AnswerMessage>({
+      id: crypto.randomUUID(), question: task.question, answer: '', sources: [], warnings: [], provider: 'LOCAL', scope: null,
+      stage: null, complete: false, harnessTaskId: task.id, approval: pending,
+      harnessSteps: task.steps.map((step) => ({ number: step.sequence_number, tool: step.tool_name || '模型决策', status: step.status === 'AWAITING_APPROVAL' ? 'awaiting' : step.status === 'SUCCEEDED' ? 'succeeded' : step.status === 'FAILED' ? 'failed' : 'running', reason: step.reason || undefined, result: step.result || undefined })),
+    }))
+  } catch { localStorage.removeItem('company-search-pending-harness-task') }
+}
+
+watch(selectedContext, async (context) => {
+  namespaces.value = []
+  if (!context) return
+  try {
+    namespaces.value = await getNamespaces(context)
+    if (!namespaces.value.includes(selectedNamespace.value)) selectedNamespace.value = namespaces.value[0] || 'default'
+  } catch (reason) {
+    statusError.value = reason instanceof Error ? reason.message : '无法读取 namespace'
+  }
+})
 
 async function ask() {
   const value = question.value.trim()
@@ -33,7 +73,8 @@ async function ask() {
   const history = messages.value.filter((item) => item.complete && item.answer).slice(-6).map((item) => ({ question: item.question, answer: item.answer }))
   const message = reactive<AnswerMessage>({
     id: crypto.randomUUID(), question: value, answer: '', sources: [], warnings: [],
-    provider: 'LOCAL', scope: null, stage: 'retrieving', complete: false,
+    provider: 'LOCAL', scope: null, stage: useHarness.value ? null : 'retrieving', complete: false,
+    harnessTaskId: null, harnessSteps: [], approval: null,
   })
   messages.value.push(message)
   question.value = ''
@@ -41,7 +82,8 @@ async function ask() {
   activeController.value = controller
   await scrollToEnd()
   try {
-    await streamAnswer({ question: value, useDeepseek: useDeepseek.value, history }, controller.signal, (event) => {
+    await streamAnswer({ question: value, useDeepseek: useDeepseek.value, useHarness: useHarness.value, k8sContext: selectedContext.value, k8sNamespace: selectedNamespace.value, deploymentYaml: deploymentYaml.value, history }, controller.signal, (event) => {
+      handleHarnessEvent(message, event)
       if (event.type === 'stage') message.stage = event.stage ?? null
       if (event.type === 'sources') message.sources = event.sources ?? []
       if (event.type === 'replace') { message.answer = ''; message.provider = event.provider ?? 'DEEPSEEK' }
@@ -51,7 +93,7 @@ async function ask() {
       if (event.type === 'error' && event.error) { message.warnings.push(event.error); message.stage = null; message.complete = true }
       void scrollToEnd()
     })
-    if (!message.complete) { message.complete = true; message.stage = null }
+    if (!message.complete && !message.approval) { message.complete = true; message.stage = null }
   } catch (reason) {
     if (!controller.signal.aborted) {
       message.warnings.push({ code: 'CONNECTION_FAILED', message: reason instanceof Error ? reason.message : '问答连接中断' })
@@ -61,6 +103,35 @@ async function ask() {
   } finally {
     activeController.value = null
   }
+}
+
+function handleHarnessEvent(message: AnswerMessage, event: import('../../types/answer').AnswerEvent) {
+  if (event.task_id) message.harnessTaskId = event.task_id
+  if (event.type === 'tool_requested' && event.tool && event.step) message.harnessSteps.push({ number: event.step, tool: event.tool, status: 'requested', reason: String(event.tool_result?.reason || '') })
+  if (event.type === 'tool_running') { const step = message.harnessSteps.find((item) => item.number === event.step); if (step) step.status = 'running' }
+  if (event.type === 'tool_result') { const step = message.harnessSteps.find((item) => item.number === event.step); if (step) { step.status = event.tool_result?.success === false ? 'failed' : 'succeeded'; step.result = event.tool_result ?? undefined } }
+  if (event.type === 'approval_required' && event.approval) { message.approval = event.approval; message.stage = null; message.complete = false; localStorage.setItem('company-search-pending-harness-task', message.harnessTaskId || ''); const step = message.harnessSteps.find((item) => item.number === event.step); if (step) step.status = 'awaiting' }
+  if (event.type === 'harness_done') { message.complete = true; message.stage = null; localStorage.removeItem('company-search-pending-harness-task') }
+}
+
+async function decideApproval(message: AnswerMessage, confirmation: string | null) {
+  if (!message.approval || !message.harnessTaskId) return
+  approvalBusy.value = true
+  try {
+    if (confirmation === null) await rejectApproval(message.approval.id)
+    else await confirmApproval(message.approval.id, confirmation)
+    message.approval = null
+    localStorage.removeItem('company-search-pending-harness-task')
+    await resumeHarness(message.harnessTaskId, useDeepseek.value, (event) => {
+      handleHarnessEvent(message, event)
+      if (event.type === 'delta') { message.answer += event.text ?? ''; message.provider = event.provider ?? message.provider }
+      if (event.type === 'replace') { message.answer = ''; message.provider = event.provider ?? 'DEEPSEEK' }
+      if (event.type === 'warning' && event.warning) message.warnings.push(event.warning)
+      if (event.type === 'error' && event.error) message.warnings.push(event.error)
+    })
+  } catch (reason) {
+    message.warnings.push({ code: 'APPROVAL_FAILED', message: reason instanceof Error ? reason.message : '审批处理失败' })
+  } finally { approvalBusy.value = false }
 }
 
 function stop() {
@@ -124,7 +195,6 @@ onBeforeUnmount(stop)
       <div v-if="!messages.length" class="answer-welcome">
         <strong>可以从一个具体问题开始</strong>
         <p>例如：“公司目前采用什么气泡检测方案？”或“Go 服务如何部署到 K8s？”</p>
-      </div>
       <article v-for="message in messages" :key="message.id" class="answer-turn">
         <div class="user-message"><span>你</span><p>{{ message.question }}</p></div>
         <div class="assistant-message">
@@ -132,6 +202,8 @@ onBeforeUnmount(stop)
           <p v-if="message.answer" class="answer-text">{{ message.answer }}</p>
           <p v-if="message.stage" class="answer-stage"><span></span>{{ stageLabels[message.stage] }}</p>
           <p v-for="warning in message.warnings" :key="warning.code" class="answer-notice is-warning">{{ warning.message }}</p>
+          <HarnessTimeline :steps="message.harnessSteps" />
+          <HarnessApproval v-if="message.approval" :approval="message.approval" :busy="approvalBusy" @confirm="decideApproval(message, $event)" @reject="decideApproval(message, null)" />
           <details v-if="message.sources.length" class="answer-sources">
             <summary>查看 {{ message.sources.length }} 条引用资料</summary>
             <ol>
@@ -146,7 +218,17 @@ onBeforeUnmount(stop)
     </section>
 
     <section class="answer-composer">
-      <label class="deepseek-toggle"><input v-model="useDeepseek" type="checkbox"><span></span><b>使用 DeepSeek 增强</b></label>
+      <div class="answer-switches">
+        <label class="deepseek-toggle"><input v-model="useHarness" type="checkbox"><span></span><b>使用 Harness</b></label>
+        <label class="deepseek-toggle"><input v-model="useDeepseek" type="checkbox"><span></span><b>使用 DeepSeek 增强</b></label>
+      </div>
+      <div v-if="useHarness" class="harness-environment">
+        <label>Context<select v-model="selectedContext"><option value="" disabled>选择 Kubernetes context</option><option v-for="item in harnessStatus?.contexts || []" :key="item" :value="item">{{ item }}</option></select></label>
+        <label>Namespace<select v-model="selectedNamespace"><option v-for="item in namespaces" :key="item" :value="item">{{ item }}</option></select></label>
+        <small v-if="!harnessStatus?.kubectl_available">未找到 kubectl，Harness 无法运行。</small>
+        <small v-else-if="!harnessStatus?.enabled">请先在 backend/.env 配置允许的 context。</small>
+      </div>
+      <details v-if="useHarness" class="harness-yaml-input"><summary>提交部署 YAML（可选）</summary><textarea v-model="deploymentYaml" rows="5" maxlength="1048576" placeholder="粘贴 Deployment、Service、ConfigMap 等白名单资源 YAML；执行前会进行服务端 dry-run 和差异预览。"></textarea></details>
       <p v-if="useDeepseek" class="privacy-hint">
         开启后，本次问题、检索到的内部资料片段和本地初稿将发送给 DeepSeek。
         <strong v-if="status && !status.deepseek_configured">尚未配置 API Key，本次仍将使用千问本地回答。</strong>
@@ -154,7 +236,7 @@ onBeforeUnmount(stop)
       <form @submit.prevent="ask">
         <textarea v-model="question" rows="3" maxlength="1000" placeholder="输入关于公司资料的问题…" @keydown="handleKeydown"></textarea>
         <button v-if="activeController" type="button" class="stop-answer" @click="stop">停止</button>
-        <button v-else type="submit" :disabled="!question.trim()">发送</button>
+        <button v-else type="submit" :disabled="!question.trim() || (useHarness && (!selectedContext || !harnessStatus?.kubectl_available))">发送</button>
       </form>
       <small>Enter 发送 · Shift + Enter 换行 · 当前对话不会永久保存</small>
     </section>

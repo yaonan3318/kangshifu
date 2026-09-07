@@ -160,6 +160,21 @@ SSE 每个消息包含 `event:` 类型和 `data:` JSON。可能出现：
 
 `scope` 表示答案依据：`INTERNAL` 为较明确的内部资料，`INTERNAL_LIMITED` 为有限的语义证据，`GENERAL` 为无内部资料时的 DeepSeek 通用知识，`NONE` 为未找到内部答案。DeepSeek 未配置或调用失败时会发送 `warning`，并保留千问本地答案。
 
+## Agent Harness
+
+`POST /api/answer/stream` 可增加 `use_harness`、`k8s_context` 和 `k8s_namespace`。关闭时沿用普通 RAG；打开后通过 SSE 返回 `harness_started`、`tool_requested`、`tool_running`、`tool_result`、`approval_required` 和 `harness_done`。
+
+```text
+GET  /api/harness/status
+GET  /api/harness/namespaces?context=docker-desktop
+GET  /api/harness/tasks/{task_id}
+POST /api/harness/tasks/{task_id}/resume
+POST /api/harness/approvals/{approval_id}/confirm
+POST /api/harness/approvals/{approval_id}/reject
+```
+
+确认接口只接受 `{"confirmation_context":"完整context名称"}`。操作内容从服务端审批记录重新读取，前端不能在确认时替换参数。YAML 部署仅允许应用资源白名单，并且必须先通过 server-side dry-run 和 diff。
+
 ## 代码入口与请求链路
 
 - `backend/app/main.py`：相当于 PHP 项目的应用入口和框架启动配置，创建常驻的 ASGI 应用。

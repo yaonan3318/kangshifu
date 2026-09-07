@@ -20,6 +20,7 @@ Mac 本地公司知识库。当前版本提供安全上传、文档解析、本�
 - 用户主动打开开关后，可让 DeepSeek 根据内部片段和千问初稿生成合并答案。
 - DeepSeek 未配置或调用失败时保留本地答案，不会中断问答。
 - 服务仅监听 `127.0.0.1`，不会开放到局域网或公网。
+- 可选开启本地 Agent Harness，让千问调用公司检索和 Kubernetes 白名单工具；所有写操作逐次人工确认。
 
 ## Mac 环境要求
 
@@ -134,6 +135,16 @@ COMPANY_SEARCH_DEEPSEEK_API_KEY=替换为你的真实Key
 ```
 
 DeepSeek 开关默认关闭。打开开关但没有填写 Key 时，系统仍返回千问本地答案，并提示“尚未配置 DeepSeek API Key，本次使用本地模型回答”。打开且配置有效时，本次问题、引用片段和千问初稿会发送给 DeepSeek。
+
+## 可选 Harness 配置
+
+Harness 默认关闭且不会自动读取本机所有 Kubernetes 集群。先确认 `kubectl config get-contexts` 中的名称，再只把允许操作的 context 写入 `backend/.env`：
+
+```env
+COMPANY_SEARCH_K8S_ALLOWED_CONTEXTS=docker-desktop,dev-cluster
+```
+
+重启应用后，知识问答页会显示 Harness 开关以及 context/namespace 选择器。关闭时保持原来的固定 RAG；打开后千问可以调用资料检索、Pod、日志、事件等只读工具。重启、扩缩容、回滚、镜像更新和 YAML apply 每次都要求输入完整 context 名称确认。首次验证请使用测试集群，详细步骤见 [Harness Mac 验收手册](docs/harness-mac-verification.md)。
 
 ### Mac 验证顺序
 

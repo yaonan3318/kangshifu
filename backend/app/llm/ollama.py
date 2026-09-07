@@ -59,3 +59,29 @@ class OllamaClient:
             raise LlmUnavailable("OLLAMA_UNAVAILABLE", "无法连接 Ollama，请先启动 Ollama") from exc
         except (json.JSONDecodeError, httpx.HTTPError) as exc:
             raise LlmUnavailable("OLLAMA_INVALID_RESPONSE", "千问本地模型返回异常") from exc
+
+    async def complete_json(self, messages: list[GenerationMessage]) -> dict:
+        """要求 Ollama 返回单个 JSON 对象，供 Harness 解析工具决策。"""
+        payload = {
+            "model": self.settings.ollama_model,
+            "messages": [message.model_dump() for message in messages],
+            "stream": False, "format": "json", "think": False,
+            "keep_alive": self.settings.ollama_keep_alive,
+            "options": {"temperature": 0.1},
+        }
+        timeout = httpx.Timeout(self.settings.ollama_timeout_seconds, connect=10.0)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(f"{self.base_url}/api/chat", json=payload)
+                response.raise_for_status()
+            content = response.json().get("message", {}).get("content", "")
+            value = json.loads(content)
+            if not isinstance(value, dict):
+                raise ValueError("decision must be an object")
+            return value
+        except httpx.TimeoutException as exc:
+            raise LlmTimeout("OLLAMA_TIMEOUT", "千问本地模型响应超时") from exc
+        except httpx.ConnectError as exc:
+            raise LlmUnavailable("OLLAMA_UNAVAILABLE", "无法连接 Ollama，请先启动 Ollama") from exc
+        except (ValueError, json.JSONDecodeError, httpx.HTTPError) as exc:
+            raise LlmUnavailable("OLLAMA_INVALID_RESPONSE", "千问没有返回有效的 Harness 决策") from exc

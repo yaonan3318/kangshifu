@@ -13,6 +13,10 @@ export interface StreamAnswerInput {
   question: string
   useDeepseek: boolean
   history: Pick<AnswerMessage, 'question' | 'answer'>[]
+  useHarness: boolean
+  k8sContext?: string
+  k8sNamespace?: string
+  deploymentYaml?: string
 }
 
 export async function streamAnswer(
@@ -26,6 +30,10 @@ export async function streamAnswer(
     body: JSON.stringify({
       question: input.question,
       use_deepseek: input.useDeepseek,
+      use_harness: input.useHarness,
+      k8s_context: input.k8sContext || null,
+      k8s_namespace: input.k8sNamespace || null,
+      deployment_yaml: input.deploymentYaml || null,
       history: input.history,
     }),
   })
@@ -34,6 +42,11 @@ export async function streamAnswer(
     throw new ApiError(body.error?.code ?? 'ANSWER_FAILED', body.error?.message ?? '无法开始问答')
   }
 
+  await consumeAnswerResponse(response, onEvent)
+}
+
+export async function consumeAnswerResponse(response: Response, onEvent: (event: AnswerEvent) => void): Promise<void> {
+  if (!response.ok || !response.body) throw new Error('Harness 流式连接失败')
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''

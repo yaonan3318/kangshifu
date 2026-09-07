@@ -17,6 +17,10 @@ class ConversationTurn(BaseModel):
 class AnswerRequest(BaseModel):
     question: str = Field(min_length=1, max_length=1000)
     use_deepseek: bool = False
+    use_harness: bool = False
+    k8s_context: str | None = Field(default=None, max_length=255)
+    k8s_namespace: str | None = Field(default=None, max_length=255)
+    deployment_yaml: str | None = Field(default=None, max_length=1_048_576)
     history: list[ConversationTurn] = Field(default_factory=list, max_length=6)
     extension: str | None = Field(default=None, max_length=16)
     document_name: str | None = Field(default=None, max_length=200)
@@ -73,7 +77,11 @@ class AnswerStatusResponse(BaseModel):
 
 
 class AnswerEvent(BaseModel):
-    type: Literal["stage", "sources", "delta", "replace", "warning", "done", "error"]
+    type: Literal[
+        "stage", "sources", "delta", "replace", "warning", "done", "error",
+        "harness_started", "tool_requested", "tool_running", "tool_result",
+        "approval_required", "approval_result", "harness_done",
+    ]
     stage: str | None = None
     provider: AnswerProvider | None = None
     text: str | None = None
@@ -84,3 +92,9 @@ class AnswerEvent(BaseModel):
     deepseek_used: bool | None = None
     source_count: int | None = None
     error: dict[str, Any] | None = None
+    task_id: uuid.UUID | None = None
+    step: int | None = None
+    tool: str | None = None
+    tool_arguments: dict[str, Any] | None = None
+    tool_result: dict[str, Any] | None = None
+    approval: dict[str, Any] | None = None

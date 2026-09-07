@@ -7,6 +7,7 @@ import time
 from app.config import get_settings
 from app.db import SessionLocal
 from app.services.processing import ProcessingService
+from app.services.harness_approvals import ApprovalService
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ def main() -> None:
     with SessionLocal() as session:
         recovered = ProcessingService(session, settings).recover_stale_jobs()
         logger.info("Worker started; recovered %s stale jobs", recovered)
+    last_harness_cleanup = 0.0
     while running:
         with SessionLocal() as session:
             service = ProcessingService(session, settings)
@@ -35,6 +37,10 @@ def main() -> None:
             if job:
                 service.process(job)
                 continue
+            # 每分钟过期审批并清理审计，避免空闲轮询每秒都执行清理查询。
+            if time.monotonic() - last_harness_cleanup >= 60:
+                ApprovalService(session, settings).expire_and_cleanup()
+                last_harness_cleanup = time.monotonic()
         time.sleep(settings.worker_poll_seconds)
     logger.info("Worker stopped")
 

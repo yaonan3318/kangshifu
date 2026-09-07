@@ -30,7 +30,7 @@ export interface AnswerStatus {
 }
 
 export interface AnswerEvent {
-  type: 'stage' | 'sources' | 'delta' | 'replace' | 'warning' | 'done' | 'error'
+  type: 'stage' | 'sources' | 'delta' | 'replace' | 'warning' | 'done' | 'error' | 'harness_started' | 'tool_requested' | 'tool_running' | 'tool_result' | 'approval_required' | 'approval_result' | 'harness_done'
   stage?: AnswerStage | null
   provider?: AnswerProvider | null
   text?: string | null
@@ -41,6 +41,23 @@ export interface AnswerEvent {
   deepseek_used?: boolean | null
   source_count?: number | null
   error?: { code: string; message: string } | null
+  task_id?: string | null
+  step?: number | null
+  tool?: string | null
+  tool_arguments?: Record<string, unknown> | null
+  tool_result?: Record<string, unknown> | null
+  approval?: HarnessApproval | null
+}
+
+export interface HarnessApproval {
+  id: string; tool_name: string; context: string; namespace: string; target: string
+  arguments: Record<string, unknown>; yaml_content?: string | null; dry_run_output?: string | null
+  diff_output?: string | null; expires_at: string
+}
+
+export interface HarnessStep {
+  number: number; tool: string; status: 'requested' | 'running' | 'succeeded' | 'failed' | 'awaiting'
+  reason?: string; result?: Record<string, unknown>
 }
 
 export interface AnswerMessage {
@@ -53,4 +70,7 @@ export interface AnswerMessage {
   scope: KnowledgeScope | null
   stage: AnswerStage | null
   complete: boolean
+  harnessTaskId: string | null
+  harnessSteps: HarnessStep[]
+  approval: HarnessApproval | null
 }
