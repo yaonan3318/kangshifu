@@ -38,7 +38,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .result-badges .match-hybrid { background: #dfeedd; color: #315432; }
 .result-content { margin: 17px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: #303a30; font-size: 14px; line-height: 1.75; }
 .search-empty { padding: 44px 12px; color: #758073; text-align: center; }
-.answer-shell { padding-bottom: 190px; }
+.answer-shell { padding-bottom: 190px; transition: padding-bottom .18s ease; }
 .answer-status { display: flex; flex-wrap: wrap; align-items: center; gap: 9px 14px; margin-bottom: 18px; color: #667064; font-size: 13px; }
 .answer-status > span { padding: 6px 10px; border-radius: 999px; background: #e9ede7; }
 .answer-status > span.is-ready { background: #dfedde; color: #315432; }
@@ -76,7 +76,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .deepseek-toggle input:checked + span { background: #365b38; }
 .deepseek-toggle input:checked + span::after { transform: translateX(15px); }
 .answer-switches { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; }
-.harness-environment { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-top: 11px; padding: 11px; border: 1px solid #d6ddd3; border-radius: 12px; background: #f5f8f3; }
+.harness-environment { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-top: 9px; padding: 9px 11px; border: 1px solid #d6ddd3; border-radius: 12px; background: #f5f8f3; }
 .harness-environment label { display: grid; min-width: 210px; gap: 5px; color: #536252; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
 .harness-environment select, .harness-approval input { min-height: 38px; border: 1px solid #c8d2c5; border-radius: 8px; background: white; padding: 0 10px; color: #1d2b20; font: inherit; }
 .harness-environment small { color: #914a3d; }

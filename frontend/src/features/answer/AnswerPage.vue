@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ApiError } from '../../api/documents'
 import { getAnswerStatus, streamAnswer } from '../../api/answer'
 import type { AnswerMessage, AnswerSource, AnswerStatus } from '../../types/answer'
@@ -22,6 +22,10 @@ const statusError = ref('')
 const messages = ref<AnswerMessage[]>([])
 const activeController = ref<AbortController | null>(null)
 const conversationEnd = ref<HTMLElement | null>(null)
+const composer = ref<HTMLElement | null>(null)
+const composerHeight = ref(190)
+const shellStyle = computed(() => ({ paddingBottom: `${composerHeight.value + 36}px` }))
+let composerObserver: ResizeObserver | null = null
 
 const stageLabels = {
   retrieving: '正在检索公司资料…',
@@ -151,7 +155,8 @@ function clearConversation() {
 
 async function scrollToEnd() {
   await nextTick()
-  conversationEnd.value?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  // 输入区采用 fixed 定位；滚到文档底部才能利用动态留白，让最新回答停在输入区上方。
+  window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' })
 }
 
 function sourceLocation(source: AnswerSource): string {
@@ -166,12 +171,24 @@ function providerLabel(message: AnswerMessage): string {
   return message.provider === 'DEEPSEEK' ? 'DeepSeek 增强' : '千问本地回答'
 }
 
-onMounted(loadStatus)
-onBeforeUnmount(stop)
+onMounted(() => {
+  void loadStatus()
+  void nextTick(() => {
+    if (!composer.value) return
+    composerObserver = new ResizeObserver(([entry]) => {
+      composerHeight.value = Math.ceil(entry.contentRect.height)
+    })
+    composerObserver.observe(composer.value)
+  })
+})
+onBeforeUnmount(() => {
+  stop()
+  composerObserver?.disconnect()
+})
 </script>
 
 <template>
-  <main class="app-shell answer-shell">
+  <main class="app-shell answer-shell" :style="shellStyle">
     <header class="hero answer-hero">
       <p class="eyebrow">KNOWLEDGE ASSISTANT · LOCAL FIRST</p>
       <h1>公司知识问答</h1>
@@ -218,7 +235,7 @@ onBeforeUnmount(stop)
       <div ref="conversationEnd"></div>
     </section>
 
-    <section class="answer-composer">
+    <section ref="composer" class="answer-composer">
       <div class="answer-switches">
         <label class="deepseek-toggle"><input v-model="useHarness" type="checkbox"><span></span><b>使用 Harness</b></label>
         <label class="deepseek-toggle"><input v-model="useDeepseek" type="checkbox"><span></span><b>使用 DeepSeek 增强</b></label>
