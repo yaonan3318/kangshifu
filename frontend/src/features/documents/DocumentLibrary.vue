@@ -5,6 +5,11 @@ import type { DocumentRecord } from '../../types/documents'
 import DocumentTable from './DocumentTable.vue'
 import DocumentDetail from './DocumentDetail.vue'
 import UploadQueue from './UploadQueue.vue'
+import BatchImport from './BatchImport.vue'
+import BatchList from './BatchList.vue'
+import BatchDetail from './BatchDetail.vue'
+import { listBatches } from '../../api/batches'
+import type { BatchRecord } from '../../types/batches'
 
 const documents = ref<DocumentRecord[]>([])
 const total = ref(0)
@@ -15,6 +20,9 @@ const extension = ref('')
 const page = ref(1)
 const pageSize = 25
 const selectedDocument = ref<DocumentRecord | null>(null)
+const libraryMode = ref<'single'|'batch'|'history'>('single')
+const batches = ref<BatchRecord[]>([])
+const selectedBatch = ref<string | null>(null)
 let searchTimer: number | undefined
 let pollTimer: number | undefined
 
@@ -37,6 +45,12 @@ async function refresh(silent = false) {
   }
 }
 
+async function refreshBatches() {
+  try { batches.value = (await listBatches()).items } catch (reason) { error.value = reason instanceof Error ? reason.message : '无法读取导入批次' }
+}
+
+async function batchCreated(id: string) { await refreshBatches(); selectedBatch.value = id; libraryMode.value = 'history'; await refresh() }
+
 watch([query, extension], () => {
   page.value = 1
   window.clearTimeout(searchTimer)
@@ -57,6 +71,7 @@ async function remove(document: DocumentRecord) {
 
 onMounted(() => {
   refresh()
+  refreshBatches()
   pollTimer = window.setInterval(() => {
     if (documents.value.some((item) => ['PENDING', 'PARSING', 'CHUNKING', 'PARSED', 'EMBEDDING', 'INDEXING'].includes(item.status))) refresh(true)
   }, 2000)
@@ -67,7 +82,10 @@ onUnmounted(() => window.clearInterval(pollTimer))
 <template>
   <main class="app-shell">
     <header class="hero"><p class="eyebrow">COMPANY SEARCH · LOCAL</p><h1>本地资料库</h1><p>文件只保存在这台 Mac 上。上传后会自动完成解析、OCR、切片和本地索引。</p></header>
-    <UploadQueue @uploaded="refresh" />
+    <nav class="library-modes" aria-label="导入方式"><button :class="{active:libraryMode==='single'}" @click="libraryMode='single'">单文件上传</button><button :class="{active:libraryMode==='batch'}" @click="libraryMode='batch'">批量导入</button><button :class="{active:libraryMode==='history'}" @click="libraryMode='history';refreshBatches()">导入批次</button></nav>
+    <UploadQueue v-if="libraryMode==='single'" @uploaded="refresh" />
+    <BatchImport v-else-if="libraryMode==='batch'" @created="batchCreated" />
+    <BatchList v-else :batches="batches" @open="selectedBatch=$event" />
     <section class="library-panel" aria-labelledby="library-title">
       <div class="section-heading"><div><p class="eyebrow">LIBRARY</p><h2 id="library-title">已托管文件 <span>{{ total }}</span></h2></div></div>
       <div class="filters"><label><span>文件名</span><input v-model="query" type="search" placeholder="输入文件名"></label><label><span>类型</span><select v-model="extension"><option value="">全部类型</option><option v-for="type in ['pdf','docx','xlsx','pptx','txt','md','csv','png','jpg']" :key="type" :value="type">{{ type.toUpperCase() }}</option></select></label></div>
@@ -76,5 +94,6 @@ onUnmounted(() => window.clearInterval(pollTimer))
       <nav v-if="pages > 1" class="pagination" aria-label="分页"><button :disabled="page === 1" @click="page--">上一页</button><span>第 {{ page }} / {{ pages }} 页</span><button :disabled="page === pages" @click="page++">下一页</button></nav>
     </section>
     <DocumentDetail v-if="selectedDocument" :document="selectedDocument" @close="selectedDocument = null" @changed="refresh" />
+    <BatchDetail v-if="selectedBatch" :id="selectedBatch" @close="selectedBatch=null" @changed="refreshBatches();refresh()" />
   </main>
 </template>

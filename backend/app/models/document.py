@@ -50,7 +50,9 @@ class Document(Base):
 
     jobs: Mapped[list["ProcessingJob"]] = relationship(back_populates="document", cascade="all, delete-orphan")
     chunks: Mapped[list["DocumentChunk"]] = relationship(back_populates="document", cascade="all, delete-orphan")
+    batch_files: Mapped[list["BatchFile"]] = relationship(back_populates="document")
 
 
 from app.models.processing_job import ProcessingJob  # noqa: E402
 from app.models.document_chunk import DocumentChunk  # noqa: E402
+from app.models.upload_batch import BatchFile  # noqa: E402

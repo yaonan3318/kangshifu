@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     library_root: Path = Field(default_factory=lambda: Path.home() / "Library/Application Support/CompanySearch")
     max_upload_bytes: int = 209_715_200
     upload_chunk_bytes: int = 1_048_576
+    batch_max_files: int = 1000
+    batch_max_total_bytes: int = 10_737_418_240
+    batch_min_free_bytes: int = 5_368_709_120
     worker_poll_seconds: float = 1.0
     worker_stale_minutes: int = 30
     embedding_model: str = "BAAI/bge-m3"

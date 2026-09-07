@@ -160,6 +160,22 @@ SSE 每个消息包含 `event:` 类型和 `data:` JSON。可能出现：
 
 `scope` 表示答案依据：`INTERNAL` 为较明确的内部资料，`INTERNAL_LIMITED` 为有限的语义证据，`GENERAL` 为无内部资料时的 DeepSeek 通用知识，`NONE` 为未找到内部答案。DeepSeek 未配置或调用失败时会发送 `warning`，并保留千问本地答案。
 
+## 批量导入接口
+
+`POST /api/batches` 创建批次并登记完整文件清单；请求包括 `name`、可选的 `category/tags/note`，以及包含 `relative_path/original_name/size_bytes` 的 `files` 数组。预先登记清单使浏览器中断后仍能识别未上传文件。
+
+`POST /api/batches/{batch_id}/files` 使用表单字段 `relative_path` 和 `file` 上传单个批次文件。内容重复时关联已有文档并返回 `DUPLICATE`，不会重复解析。
+
+```text
+GET  /api/batches
+GET  /api/batches/{batch_id}
+POST /api/batches/{batch_id}/files/{file_id}/retry
+POST /api/batches/{batch_id}/files/{file_id}/ignore
+POST /api/batches/{batch_id}/cancel
+```
+
+批次详情分别返回上传和处理状态。只有处理状态为 `INDEXED` 的文件可参与检索。
+
 ## Agent Harness
 
 `POST /api/answer/stream` 可增加 `use_harness`、`k8s_context` 和 `k8s_namespace`。关闭时沿用普通 RAG；打开后通过 SSE 返回 `harness_started`、`tool_requested`、`tool_running`、`tool_result`、`approval_required` 和 `harness_done`。

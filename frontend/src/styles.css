@@ -122,6 +122,19 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .answer-composer form button.stop-answer { background: #85473f; }
 .answer-composer > small { display: block; margin-top: 6px; color: #849081; font-size: 11px; text-align: right; }
 .library-panel { margin-top: 22px; }
+.library-modes { display:flex; width:fit-content; gap:5px; margin:0 0 14px; padding:4px; border:1px solid #d6ddd3; border-radius:11px; background:#fff; }
+.library-modes button { min-height:34px; border:0; border-radius:8px; padding:0 13px; background:transparent; color:#526050; cursor:pointer; }
+.library-modes button.active { background:#263a27; color:#fff; }
+.batch-form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.batch-form label { display:grid; gap:6px; color:#5b6559; font-size:13px; }
+.batch-form input,.batch-toolbar select { min-height:43px; border:1px solid #d5dbd2; border-radius:10px; padding:0 12px; background:#fff; }
+.batch-pickers,.batch-toolbar { display:flex; flex-wrap:wrap; gap:9px; margin-top:15px; }
+.secondary-action,.batch-toolbar button { display:inline-flex; min-height:40px; align-items:center; padding:0 14px; border:1px solid #cad3c7; border-radius:9px; background:#fff; color:#324a33; cursor:pointer; }
+.batch-selection { max-height:260px; overflow:auto; margin-top:15px; border-top:1px solid #e6ebe4; }
+.batch-selection div { display:flex; justify-content:space-between; gap:15px; padding:9px 3px; border-bottom:1px solid #edf0eb; font-size:13px; }.batch-selection small{color:#788276}.batch-selection p{color:#6f796d;font-size:12px}
+.batch-submit { margin-top:16px; min-height:44px; border:0; border-radius:10px; padding:0 18px; background:#263a27; color:#fff; font-weight:700; cursor:pointer; }.batch-submit:disabled{opacity:.45}
+.batch-list { margin-top:0; }.batch-cards{display:grid;gap:10px}.batch-cards>button{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:20px;width:100%;padding:15px;border:1px solid #e0e5de;border-radius:12px;background:#fff;text-align:left;cursor:pointer}.batch-cards span{display:grid;gap:4px}.batch-cards small{color:#7c877a}.batch-counts{text-align:right}.batch-failed{color:#a5483f;font-size:12px}
+.batch-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:22px 0}.batch-metrics div{display:grid;gap:4px;padding:12px;border-radius:10px;background:#edf2eb}.batch-metrics b{font-size:22px}.batch-metrics span{color:#707c6e;font-size:11px}.batch-toolbar{margin-bottom:15px}.batch-toolbar select{margin-left:auto}.batch-file-list{display:grid;gap:9px}.batch-file-list article{display:flex;justify-content:space-between;gap:12px;padding:13px;border:1px solid #dce2d9;border-radius:10px;background:#fff}.batch-file-list article>div{display:grid;gap:4px;min-width:0}.batch-file-list small{overflow-wrap:anywhere;color:#7c867a}.batch-file-list em{color:#536852;font-size:11px;font-style:normal}.batch-file-list p{margin:3px 0 0;color:#9a4439;font-size:12px}.batch-file-list article>span{display:flex;gap:5px}.batch-file-list button{height:32px;border:1px solid #ccd5c9;border-radius:7px;background:#fff;color:#405d41;cursor:pointer}
 .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 20px; }
 .section-heading h2 { margin: 5px 0 0; font-size: 24px; font-weight: 600; }
 .section-heading h2 span { color: #829080; font-weight: 400; }
@@ -197,6 +210,7 @@ td small { color: #8a9388; font-family: ui-monospace, monospace; }
   .answer-composer { width: calc(100% - 20px); margin-bottom: 10px; }
   .answer-sources li summary { display: grid; }
   .upload-list li { grid-template-columns: 1fr; gap: 8px; }
+  .batch-form,.batch-metrics{grid-template-columns:1fr}.batch-cards>button{grid-template-columns:1fr}.batch-counts{text-align:left}.batch-file-list article{display:grid}
   .drop-zone { padding: 20px; text-align: center; }
   .detail-panel { padding: 22px 16px; }
 }

@@ -16,6 +16,7 @@ from app.services.chunking import chunk_blocks
 from app.services.embeddings import EmbeddingService
 from app.services.keywords import keyword_text
 from app.services.managed_storage import ManagedStorage
+from app.services.batches import BatchService
 
 logger = logging.getLogger(__name__)
 
@@ -76,11 +77,15 @@ class ProcessingService:
                 return
             if job.job_type == JobType.INDEX:
                 self._index(document, job)
-                return
-            self._parse(document, job)
+            else:
+                self._parse(document, job)
+            BatchService(self.session, self.settings).synchronize_document(document.id)
         except Exception as exc:
             self.session.rollback()
             self._mark_failed(job.id, exc)
+            failed_job = self.session.get(ProcessingJob, job.id)
+            if failed_job:
+                BatchService(self.session, self.settings).synchronize_document(failed_job.document_id)
 
     def _parse(self, document: Document, job: ProcessingJob) -> None:
         """从磁盘解析附件，把统一文本块切片后写入 PostgreSQL。"""
