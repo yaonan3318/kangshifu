@@ -64,7 +64,18 @@ class HarnessService:
     async def _run(self, task: HarnessTask, use_deepseek: bool) -> AsyncIterator[AnswerEvent]:
         while task.current_step < task.max_steps and datetime.now(UTC) < task.deadline_at:
             try:
-                decision = await self.planner.decide(task.question, task.context, task.namespace, self.registry, task.history, bool(task.deployment_yaml))
+                # 初始 history 可能包含上一轮对话，但它不能替代本次任务的工具证据。
+                # 本次 Harness 尚未调用工具时，强制规划器先执行一个白名单工具。
+                has_tool_evidence = any(item.get("tool") for item in task.history)
+                decision = await self.planner.decide(
+                    task.question,
+                    task.context,
+                    task.namespace,
+                    self.registry,
+                    task.history,
+                    bool(task.deployment_yaml),
+                    require_tool=not has_tool_evidence,
+                )
             except LlmError as exc:
                 task.status, task.error_code, task.error_message = HarnessTaskStatus.FAILED, exc.code, exc.message
                 self.session.commit()
