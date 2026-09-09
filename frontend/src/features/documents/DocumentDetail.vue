@@ -1,64 +1,22 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ApiError, getDocumentContent, reprocessDocument } from '../../api/documents'
+import { listChunks } from '../../api/chunks'
+import { ApiError, listDocumentVersions, reprocessDocument, updateDocument } from '../../api/documents'
 import type { DocumentChunk, DocumentRecord } from '../../types/documents'
+import type { KnowledgeBaseRecord } from '../../types/knowledgeBases'
+import ChunkEditor from './ChunkEditor.vue'
 
-const props = defineProps<{ document: DocumentRecord }>()
-const emit = defineEmits<{ close: []; changed: [] }>()
-const chunks = ref<DocumentChunk[]>([])
-const total = ref(0)
-const page = ref(1)
-const loading = ref(false)
-const error = ref('')
-const pageSize = 10
-const pages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
-
-function source(chunk: DocumentChunk): string {
-  if (chunk.page_start) return `第 ${chunk.page_start}${chunk.page_end && chunk.page_end !== chunk.page_start ? `–${chunk.page_end}` : ''} 页`
-  if (chunk.slide_number) return `幻灯片 ${chunk.slide_number}`
-  if (chunk.sheet_name) return `${chunk.sheet_name}${chunk.row_start ? ` · 第 ${chunk.row_start}${chunk.row_end && chunk.row_end !== chunk.row_start ? `–${chunk.row_end}` : ''} 行` : ''}`
-  return `片段 ${chunk.sequence_number}`
-}
-
-async function load() {
-  loading.value = true
-  error.value = ''
-  try {
-    const result = await getDocumentContent(props.document.id, page.value, pageSize)
-    chunks.value = result.items
-    total.value = result.total
-  } catch (reason) {
-    error.value = reason instanceof ApiError ? reason.message : '无法读取解析内容'
-  } finally { loading.value = false }
-}
-
-async function reprocess() {
-  try {
-    await reprocessDocument(props.document.id)
-    emit('changed')
-    emit('close')
-  } catch (reason) {
-    error.value = reason instanceof ApiError ? reason.message : '无法重新处理'
-  }
-}
-
-watch(() => props.document.id, () => { page.value = 1; load() }, { immediate: true })
-watch(page, load)
+const props=defineProps<{document:DocumentRecord;knowledgeBases:KnowledgeBaseRecord[]}>();const emit=defineEmits<{close:[];changed:[]}>()
+const chunks=ref<DocumentChunk[]>([]);const versions=ref<DocumentRecord[]>([]);const total=ref(0);const page=ref(1);const loading=ref(false);const error=ref('');const tab=ref<'overview'|'chunks'|'versions'>('overview');const tags=ref(props.document.tags.join(','));const targetBase=ref(props.document.knowledge_base_id);const pageSize=10
+const pages=computed(()=>Math.max(1,Math.ceil(total.value/pageSize)))
+async function load(){loading.value=true;error.value='';try{const [content,history]=await Promise.all([listChunks(props.document.id,page.value,pageSize),listDocumentVersions(props.document.id)]);chunks.value=content.items;total.value=content.total;versions.value=history}catch(reason){error.value=reason instanceof ApiError?reason.message:'无法读取文档详情'}finally{loading.value=false}}
+async function saveOverview(){try{await updateDocument(props.document.id,{knowledge_base_id:targetBase.value,tags:tags.value.split(',').map(x=>x.trim()).filter(Boolean)});emit('changed')}catch(reason){error.value=reason instanceof ApiError?reason.message:'保存失败'}}
+async function reprocess(){try{await reprocessDocument(props.document.id);emit('changed');emit('close')}catch(reason){if(reason instanceof ApiError&&reason.code==='MANUAL_CHUNKS_WOULD_BE_LOST'&&window.confirm(`${reason.message}，确定继续吗？`)){await fetch(`/api/documents/${props.document.id}/reprocess?confirm_overwrite=true`,{method:'POST'});emit('changed');emit('close')}else error.value=reason instanceof ApiError?reason.message:'重新处理失败'}}
+watch(()=>props.document.id,()=>{page.value=1;load()},{immediate:true});watch(page,load)
 </script>
-
-<template>
-  <div class="detail-backdrop" @click.self="emit('close')">
-    <section class="detail-panel" role="dialog" aria-modal="true" aria-labelledby="detail-title">
-      <header><div><p class="eyebrow">DOCUMENT</p><h2 id="detail-title">{{ document.original_name }}</h2></div><button class="close-button" type="button" aria-label="关闭" @click="emit('close')">×</button></header>
-      <dl><div><dt>状态</dt><dd>{{ document.status }}</dd></div><div><dt>类型</dt><dd>{{ document.extension.toUpperCase() }}</dd></div><div><dt>片段数</dt><dd>{{ total }}</dd></div><div v-if="document.parser_name"><dt>解析器</dt><dd>{{ document.parser_name }} {{ document.parser_version }}</dd></div></dl>
-      <p v-if="document.error_message" class="error" role="alert">{{ document.error_message }}</p>
-      <div class="detail-actions"><button type="button" @click="reprocess">重新处理</button></div>
-      <p v-if="loading" class="empty">正在读取解析内容…</p>
-      <p v-else-if="!chunks.length" class="empty">当前还没有解析内容。</p>
-      <ol v-else class="chunk-list">
-        <li v-for="chunk in chunks" :key="chunk.id"><div class="chunk-meta"><strong>{{ source(chunk) }}</strong><span v-if="chunk.section_path.length">{{ chunk.section_path.join(' / ') }}</span><span v-if="chunk.ocr_confidence !== null">OCR {{ Math.round(chunk.ocr_confidence * 100) }}%</span></div><pre>{{ chunk.content }}</pre></li>
-      </ol>
-      <nav v-if="pages > 1" class="pagination"><button :disabled="page === 1" @click="page--">上一页</button><span>{{ page }} / {{ pages }}</span><button :disabled="page === pages" @click="page++">下一页</button></nav>
-    </section>
-  </div>
-</template>
+<template><div class="detail-backdrop" @click.self="emit('close')"><section class="detail-panel" role="dialog" aria-modal="true"><header><div><p class="eyebrow">DOCUMENT</p><h2>{{document.original_name}}</h2></div><button class="close-button" @click="emit('close')">×</button></header>
+  <nav class="detail-tabs"><button :class="{active:tab==='overview'}" @click="tab='overview'">基本信息</button><button :class="{active:tab==='chunks'}" @click="tab='chunks'">片段 {{total}}</button><button :class="{active:tab==='versions'}" @click="tab='versions'">版本历史</button></nav><p v-if="error" class="error">{{error}}</p>
+  <section v-if="tab==='overview'" class="detail-section"><dl><div><dt>状态</dt><dd>{{document.status}}</dd></div><div><dt>版本</dt><dd>v{{document.version_number}}</dd></div><div><dt>相对路径</dt><dd>{{document.relative_path||'—'}}</dd></div><div><dt>检索状态</dt><dd>{{document.enabled?'启用':'停用'}}</dd></div></dl><div class="governance-form"><label>知识库<select v-model="targetBase"><option v-for="item in knowledgeBases.filter(x=>x.enabled)" :value="item.id">{{item.name}}</option></select></label><label>标签<input v-model="tags" placeholder="使用逗号分隔"></label><button @click="saveOverview">保存资料设置</button><button @click="reprocess">重新处理</button></div></section>
+  <section v-else-if="tab==='chunks'"><p v-if="loading" class="empty">正在读取片段…</p><ol v-else class="chunk-list"><ChunkEditor v-for="chunk in chunks" :key="chunk.id" :chunk="chunk" @changed="load"/></ol><nav v-if="pages>1" class="pagination"><button :disabled="page===1" @click="page--">上一页</button><span>{{page}} / {{pages}}</span><button :disabled="page===pages" @click="page++">下一页</button></nav></section>
+  <section v-else><ul class="governance-list"><li v-for="item in versions" :key="item.id"><div><strong>v{{item.version_number}} · {{item.original_name}}</strong><small>{{item.status}} · {{item.enabled?'启用':'停用'}}</small></div></li></ul></section>
+</section></div></template>

@@ -12,7 +12,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
   throw new ApiError(body.error?.code ?? 'REQUEST_FAILED', body.error?.message ?? '请求失败', body.error?.details)
 }
 
-export function uploadDocument(file: File, onProgress: (progress: UploadProgress) => void): Promise<DocumentRecord> {
+export function uploadDocument(file: File, onProgress: (progress: UploadProgress) => void, knowledgeBaseId?: string): Promise<DocumentRecord> {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest()
     request.open('POST', '/api/documents/upload')
@@ -29,6 +29,7 @@ export function uploadDocument(file: File, onProgress: (progress: UploadProgress
     request.onerror = () => reject(new ApiError('NETWORK_ERROR', '无法连接本地服务'))
     const form = new FormData()
     form.append('file', file)
+    if (knowledgeBaseId) form.append('knowledge_base_id', knowledgeBaseId)
     request.send(form)
   })
 }
@@ -40,6 +41,12 @@ export async function listDocuments(params: URLSearchParams): Promise<DocumentLi
 export async function deleteDocument(id: string): Promise<void> {
   await parseResponse<void>(await fetch(`/api/documents/${id}`, { method: 'DELETE' }))
 }
+
+export async function restoreDocument(id: string): Promise<DocumentRecord> { return parseResponse(await fetch(`/api/documents/${id}/restore`, {method:'POST'})) }
+export async function purgeDocument(id: string): Promise<void> { await parseResponse<void>(await fetch(`/api/documents/${id}/purge`, {method:'DELETE'})) }
+export async function setDocumentEnabled(id: string, enabled: boolean): Promise<DocumentRecord> { return parseResponse(await fetch(`/api/documents/${id}/${enabled?'enable':'disable'}`, {method:'POST'})) }
+export async function updateDocument(id: string, body: {knowledge_base_id?:string;relative_path?:string;tags?:string[];metadata?:Record<string,unknown>}): Promise<DocumentRecord> { return parseResponse(await fetch(`/api/documents/${id}`, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})) }
+export async function listDocumentVersions(id: string): Promise<DocumentRecord[]> { return parseResponse(await fetch(`/api/documents/${id}/versions`)) }
 
 export async function getDocumentContent(id: string, page = 1, pageSize = 25): Promise<DocumentContent> {
   return parseResponse(await fetch(`/api/documents/${id}/content?page=${page}&page_size=${pageSize}`))

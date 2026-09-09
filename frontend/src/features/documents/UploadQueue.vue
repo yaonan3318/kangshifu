@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { ApiError, uploadDocument } from '../../api/documents'
+import type { KnowledgeBaseRecord } from '../../types/knowledgeBases'
 
 type QueueState = 'waiting' | 'uploading' | 'done' | 'failed'
 interface QueueItem { id: string; file: File; state: QueueState; progress: number; message: string }
 
 const emit = defineEmits<{ uploaded: [] }>()
+const props = defineProps<{ knowledgeBases: KnowledgeBaseRecord[]; knowledgeBaseId: string }>()
+const selectedBase = ref(props.knowledgeBaseId)
+watch(()=>props.knowledgeBaseId,value=>{if(!selectedBase.value)selectedBase.value=value})
 const queue = ref<QueueItem[]>([])
 const dragging = ref(false)
 const notice = ref<{ kind: 'success' | 'warning' | 'error'; message: string } | null>(null)
@@ -38,7 +42,7 @@ function runQueue() {
     item.message = '正在上传'
     uploadDocument(item.file, ({ loaded, total }) => {
       item.progress = total ? Math.min(100, Math.round((loaded / total) * 100)) : 0
-    }).then(() => {
+    }, selectedBase.value).then(() => {
       item.state = 'done'
       item.progress = 100
       item.message = '等待处理'
@@ -67,6 +71,7 @@ function runQueue() {
       <div><p class="eyebrow">UPLOAD</p><h2 id="upload-title">添加本地资料</h2></div>
       <label class="primary-action">选择文件<input class="visually-hidden" type="file" multiple @change="selected"></label>
     </div>
+    <label class="upload-destination"><span>上传到</span><select v-model="selectedBase"><option v-for="item in knowledgeBases.filter(x=>x.enabled)" :key="item.id" :value="item.id">{{item.name}}</option></select></label>
     <div class="drop-zone" :class="{ active: dragging }" @dragenter.prevent="dragging = true" @dragover.prevent @dragleave.prevent="dragging = false" @drop.prevent="dropped">
       <strong>将文件拖到这里</strong><span>支持 PDF、Office、新文本与图片，单文件最大 200 MB</span>
     </div>

@@ -14,6 +14,16 @@ export interface DocumentRecord {
   parser_version: string | null
   created_at: string
   updated_at: string
+  knowledge_base_id: string
+  relative_path: string | null
+  version_number: number
+  previous_version_id: string | null
+  enabled: boolean
+  deleted_at: string | null
+  deleted_reason: string | null
+  metadata_json: Record<string, unknown>
+  tags: string[]
+  chunk_count: number
 }
 
 export interface DocumentList {
@@ -34,6 +44,7 @@ export interface UploadProgress {
 
 export interface DocumentChunk {
   id: string
+  document_id?: string
   sequence_number: number
   page_start: number | null
   page_end: number | null
@@ -44,6 +55,11 @@ export interface DocumentChunk {
   section_path: string[]
   content: string
   ocr_confidence: number | null
+  original_content?: string | null
+  enabled?: boolean
+  manually_edited?: boolean
+  token_count?: number | null
+  updated_at?: string
 }
 
 export interface DocumentContent {
