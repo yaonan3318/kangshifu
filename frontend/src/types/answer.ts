@@ -126,4 +126,8 @@ export interface AnswerTurn {
   harnessSteps: HarnessStep[]
   approval: HarnessApproval | null
   sourcesVisible?: boolean
+  feedbackRating?: 'UP' | 'DOWN' | null
+  feedbackMode?: boolean
+  feedbackReasons?: string[]
+  feedbackComment?: string
 }

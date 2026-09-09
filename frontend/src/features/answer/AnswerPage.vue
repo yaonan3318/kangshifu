@@ -7,6 +7,7 @@ import { listKnowledgeBases } from '../../api/knowledgeBases'
 import type { KnowledgeBaseRecord } from '../../types/knowledgeBases'
 import { listAssistants } from '../../api/assistants'
 import type { AssistantRecord } from '../../types/assistant'
+import { submitFeedback } from '../../api/feedback'
 import { getHarnessStatus, getNamespaces, confirmApproval, getHarnessTask, rejectApproval, resumeHarness } from '../../api/harness'
 import type { HarnessStatus } from '../../types/harness'
 import { archiveChatSession, createChatSession, deleteChatSession, getChatSession, listChatSessions, renameChatSession, restoreChatSession } from '../../api/chat'
@@ -736,6 +737,36 @@ watch(selectedContext, async (context) => {
   }
 })
 
+const DOWN_REASONS = ['答非所问', '内容不准确', '引用不正确', '资料已经过期', '回答不完整', '没有找到已有资料', '回答速度太慢']
+
+function openFeedbackMode(turn: AnswerTurn) {
+  turn.feedbackMode = !turn.feedbackMode
+  if (turn.feedbackMode) {
+    turn.feedbackReasons = []
+    turn.feedbackComment = ''
+  }
+}
+
+async function sendFeedback(turn: AnswerTurn, rating: 'UP' | 'DOWN') {
+  if (!turn.assistantMessageId) return
+  const reasons = rating === 'DOWN' ? (turn.feedbackReasons ?? []) : []
+  const comment = rating === 'DOWN' ? (turn.feedbackComment ?? '').trim() : ''
+  try {
+    await submitFeedback({ messageId: turn.assistantMessageId, rating, reasons, comment })
+    turn.feedbackRating = rating
+    turn.feedbackMode = false
+  } catch (reason) {
+    turn.warnings.push({ code: 'FEEDBACK_FAILED', message: reason instanceof Error ? reason.message : '反馈提交失败' })
+  }
+}
+
+function toggleReason(turn: AnswerTurn, reason: string) {
+  if (!turn.feedbackReasons) turn.feedbackReasons = []
+  const index = turn.feedbackReasons.indexOf(reason)
+  if (index >= 0) turn.feedbackReasons.splice(index, 1)
+  else turn.feedbackReasons.push(reason)
+}
+
 async function restorePendingApproval() {
   const taskId = window.localStorage.getItem('company-search-pending-harness-task')
   if (!taskId || !activeSessionId.value) return
@@ -887,6 +918,32 @@ onBeforeUnmount(() => {
 
             <HarnessTimeline :steps="turn.harnessSteps" />
             <HarnessApproval v-if="turn.approval" :approval="turn.approval" :busy="approvalBusy" @confirm="decideApproval(turn, $event)" @reject="decideApproval(turn, null)" />
+
+            <div v-if="!turn.generating && turn.assistantMessageId && turn.answer" class="feedback-bar">
+              <span v-if="turn.feedbackRating" class="feedback-done">{{ turn.feedbackRating === 'UP' ? '已标记有帮助' : '已标记没帮助' }}</span>
+              <template v-else>
+                <span class="feedback-ask">这个回答有帮助吗？</span>
+                <button type="button" class="foot-action like" @click="sendFeedback(turn, 'UP')">有帮助</button>
+                <button type="button" class="foot-action dislike" @click="openFeedbackMode(turn)">没帮助</button>
+              </template>
+            </div>
+            <div v-if="turn.feedbackMode" class="feedback-panel">
+              <p>请告诉我哪里不够好（可多选）</p>
+              <div class="feedback-reasons">
+                <label v-for="reason in DOWN_REASONS" :key="reason">
+                  <input
+                    type="checkbox"
+                    :checked="(turn.feedbackReasons ?? []).includes(reason)"
+                    @change="toggleReason(turn, reason)"
+                  >{{ reason }}
+                </label>
+              </div>
+              <textarea v-model="turn.feedbackComment" rows="2" maxlength="2000" placeholder="补充意见（可选）"></textarea>
+              <div class="feedback-actions">
+                <button type="button" class="secondary-action" @click="turn.feedbackMode = false">取消</button>
+                <button type="button" class="send-answer" @click="sendFeedback(turn, 'DOWN')">提交反馈</button>
+              </div>
+            </div>
 
             <footer v-if="turn.answer || turn.sources.length" class="answer-card-foot">
               <span v-if="turn.answer && turn.metrics && latencySummary(turn)" class="metrics-note">{{ latencySummary(turn) }}</span>

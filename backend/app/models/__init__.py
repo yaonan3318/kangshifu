@@ -15,6 +15,7 @@ from app.models.tag import Tag, document_tags
 from app.models.retrieval_evaluation import RetrievalTestCase, RetrievalTestRun
 from app.models.chat import ChatMessage, ChatMessageRole, ChatMessageSource, ChatMessageStatus, ChatProvider, ChatSession
 from app.models.assistant import DEFAULT_ASSISTANT_ID, Assistant, assistant_knowledge_bases
+from app.models.feedback import AnswerFeedback, FeedbackRating
 
 __all__ = [
     "ApprovalStatus", "Document", "DocumentStatus", "DocumentChunk", "HarnessApproval", "HarnessStep",
@@ -24,5 +25,5 @@ __all__ = [
     "ChatMessage", "ChatMessageRole", "ChatMessageSource", "ChatMessageStatus", "ChatProvider", "ChatSession",
     "DEFAULT_ASSISTANT_ID", "Assistant", "assistant_knowledge_bases",
     "AclPermission", "AuthSession", "Department", "DocumentAcl", "DocumentVisibility",
-    "Role", "SubjectType", "User", "user_roles", "AuditLog",
+    "Role", "SubjectType", "User", "user_roles", "AuditLog", "AnswerFeedback", "FeedbackRating",
 ]

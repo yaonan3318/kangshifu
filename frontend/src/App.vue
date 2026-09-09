@@ -5,10 +5,11 @@ import DocumentLibrary from './features/documents/DocumentLibrary.vue'
 import SearchPage from './features/search/SearchPage.vue'
 import RetrievalLab from './features/search/RetrievalLab.vue'
 import AssistantManager from './features/assistants/AssistantManager.vue'
+import FeedbackAdmin from './features/feedback/FeedbackAdmin.vue'
 import LoginPanel from './components/LoginPanel.vue'
 import { getAuthState, logoutRequest, type AuthUser } from './api/auth'
 
-type PageKey = 'answer' | 'search' | 'library' | 'lab' | 'assistants'
+type PageKey = 'answer' | 'search' | 'library' | 'lab' | 'assistants' | 'feedback'
 
 const page = ref<PageKey>('answer')
 const currentUser = ref<AuthUser | null>(null)
@@ -22,6 +23,7 @@ const pages: Record<PageKey, unknown> = {
   library: DocumentLibrary,
   lab: RetrievalLab,
   assistants: AssistantManager,
+  feedback: FeedbackAdmin,
 }
 
 const activePage = computed(() => pages[page.value])
@@ -35,6 +37,7 @@ const navItems = computed(() => {
   if (isSuper.value) {
     items.push({ key: 'lab', label: '检索实验室' })
     items.push({ key: 'assistants', label: '助手管理' })
+    items.push({ key: 'feedback', label: '反馈管理' })
   }
   return items
 })
