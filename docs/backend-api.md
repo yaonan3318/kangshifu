@@ -216,3 +216,49 @@ location /api/ {
 ```
 
 生产部署还应增加身份认证、权限隔离、速率限制和审计日志；当前本地版尚未实现这些能力。
+
+## P0 知识治理接口
+
+知识库：
+
+```text
+GET   /api/knowledge-bases
+POST  /api/knowledge-bases
+PATCH /api/knowledge-bases/{id}
+POST  /api/knowledge-bases/{id}/enable
+POST  /api/knowledge-bases/{id}/disable
+```
+
+`POST /api/documents/upload` 增加可选表单字段 `knowledge_base_id`；批次创建 JSON 同样支持该字段。`GET /api/documents` 支持 `knowledge_base_id`、`tag` 和 `deleted=true`。
+
+```text
+PATCH  /api/documents/{id}              修改知识库、路径、标签和元数据
+POST   /api/documents/{id}/enable       允许参与检索
+POST   /api/documents/{id}/disable      停止参与检索
+POST   /api/documents/{id}/restore      从回收站恢复
+DELETE /api/documents/{id}/purge        永久删除回收站资料
+GET    /api/documents/{id}/versions     查看版本关系
+GET    /api/documents/{id}/chunks       查看可治理片段
+PATCH  /api/chunks/{id}                 修改内容并原子重建索引
+POST   /api/chunks/{id}/enable
+POST   /api/chunks/{id}/disable
+POST   /api/chunks/{id}/reindex
+POST   /api/chunks/{id}/restore-original
+```
+
+普通 `DELETE /api/documents/{id}` 现在只执行软删除。资料一旦软删除或停用，统一检索服务会让资料检索、知识问答和 Harness 同时排除它。
+
+## 检索实验室接口
+
+```text
+POST   /api/retrieval-lab/inspect
+GET    /api/retrieval-lab/cases
+POST   /api/retrieval-lab/cases
+PATCH  /api/retrieval-lab/cases/{id}
+DELETE /api/retrieval-lab/cases/{id}
+POST   /api/retrieval-lab/runs
+GET    /api/retrieval-lab/runs
+GET    /api/retrieval-lab/runs/{id}
+```
+
+`inspect` 返回规范化问题、扩展词、实际模式、降级提示、耗时，以及关键词、向量、RRF、精排和最终上下文各阶段候选。普通 `/api/search` 不返回长阶段明细，只返回最终结果和简要诊断。

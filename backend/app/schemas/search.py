@@ -14,6 +14,7 @@ class SearchRequest(BaseModel):
     created_to: date | None = None
     knowledge_base_id: uuid.UUID | None = None
     tags: list[str] = Field(default_factory=list, max_length=20)
+    include_stages: bool = False
     limit: int = Field(default=10, ge=1, le=50)
 
 

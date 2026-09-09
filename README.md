@@ -21,6 +21,10 @@ Mac 本地公司知识库。当前版本提供安全上传、文档解析、本�
 - DeepSeek 未配置或调用失败时保留本地答案，不会中断问答。
 - 服务仅监听 `127.0.0.1`，不会开放到局域网或公网。
 - 可选开启本地 Agent Harness，让千问调用公司检索和 Kubernetes 白名单工具；所有写操作逐次人工确认。
+- 支持多个知识库、文档标签、版本关系、停用和永久保留的回收站。
+- 支持人工编辑、停用、恢复和重新索引单个文档片段。
+- 提供检索实验室，展示关键词、语义、RRF、精排和最终上下文，并保存标准问题评测结果。
+- 可选使用本地 `BAAI/bge-reranker-v2-m3` 精排；关闭时不下载、不加载、不占运行内存。
 
 ## Mac 环境要求
 
@@ -51,6 +55,7 @@ cd kangshifu
 5. 启动 PostgreSQL + pgvector。
 6. 执行 Alembic 数据库迁移。
 7. 下载 BGE-M3 到本机资料目录。首次下载耗时取决于网络，后续安装会复用缓存。
+8. 如果 `.env` 开启 `COMPANY_SEARCH_RERANK_ENABLED=true`，同时准备本地精排模型。
 
 `setup.sh` 不会自动安装 Ollama、登录云端账号或修改其他项目的 Conda 环境。安装 Ollama 后执行：
 
@@ -111,7 +116,16 @@ GET    /api/documents/{id}/content
 GET    /api/documents/{id}/download
 POST   /api/documents/{id}/reprocess
 DELETE /api/documents/{id}
+GET    /api/knowledge-bases
+GET    /api/documents?deleted=true
+POST   /api/documents/{id}/restore
+DELETE /api/documents/{id}/purge
+GET    /api/documents/{id}/chunks
+PATCH  /api/chunks/{id}
 POST   /api/search
+POST   /api/retrieval-lab/inspect
+GET    /api/retrieval-lab/cases
+POST   /api/retrieval-lab/runs
 GET    /api/answer/status
 POST   /api/answer/stream
 GET    /api/health
@@ -135,6 +149,26 @@ COMPANY_SEARCH_DEEPSEEK_API_KEY=替换为你的真实Key
 ```
 
 DeepSeek 开关默认关闭。打开开关但没有填写 Key 时，系统仍返回千问本地答案，并提示“尚未配置 DeepSeek API Key，本次使用本地模型回答”。打开且配置有效时，本次问题、引用片段和千问初稿会发送给 DeepSeek。
+
+## P0 知识治理与精排
+
+升级后系统会自动创建“默认知识库”，历史资料、OCR、切片和向量不会丢失。普通删除只会把资料移入回收站；回收站内容立即停止参与资料检索、知识问答和 Harness，只有明确执行“永久删除”才会移除原附件。
+
+默认继续使用原有混合检索，不额外占用精排模型内存。如需在 M3 Pro 上验证本地精排：
+
+```env
+COMPANY_SEARCH_RERANK_ENABLED=true
+```
+
+保存到 `backend/.env` 后执行：
+
+```bash
+./scripts/stop.sh
+./scripts/setup.sh
+./scripts/start.sh
+```
+
+模型下载或推理失败时，单次请求会自动降级为 RRF，页面显示提示，上传、检索和问答仍可继续。
 
 ## 可选 Harness 配置
 
@@ -207,3 +241,5 @@ git pull origin main
 - [第三期实施计划](docs/superpowers/plans/2026-09-03-local-hybrid-search-phase3.md)
 - [第四期设计](docs/superpowers/specs/2026-09-03-local-rag-answering-design.md)
 - [第四期实施计划](docs/superpowers/plans/2026-09-03-local-rag-answering-phase4.md)
+- [P0 产品设计](docs/superpowers/specs/2026-09-09-company-knowledge-assistant-p0-design.md)
+- [P0 实施计划](docs/superpowers/plans/2026-09-09-company-knowledge-assistant-p0.md)

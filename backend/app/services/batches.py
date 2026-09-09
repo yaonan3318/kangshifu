@@ -76,9 +76,16 @@ class BatchService:
                 row.processing_status = processing_status(duplicate)
             else:
                 kind = detect_allowed_type(staged.temp_path, staged.original_name)
+                previous = self.session.scalar(select(Document).where(
+                    Document.knowledge_base_id == batch.knowledge_base_id,
+                    Document.relative_path == path,
+                    Document.deleted_at.is_(None),
+                ).order_by(Document.version_number.desc()).limit(1))
                 document = Document(id=uuid.uuid4(), original_name=staged.original_name, stored_path="", extension=kind.extension,
                     mime_type=kind.mime_type, size_bytes=staged.size_bytes, sha256=staged.sha256, status=DocumentStatus.PENDING,
-                    knowledge_base_id=batch.knowledge_base_id, relative_path=path)
+                    knowledge_base_id=batch.knowledge_base_id, relative_path=path,
+                    previous_version_id=previous.id if previous else None,
+                    version_number=(previous.version_number + 1) if previous else 1)
                 promoted = self.storage.promote(staged, document.id, kind.extension); document.stored_path = promoted
                 document.jobs.append(ProcessingJob(job_type=JobType.PARSE, status=JobStatus.QUEUED))
                 row.document, row.upload_status, row.processing_status = document, BatchUploadStatus.UPLOADED, BatchProcessingStatus.WAITING

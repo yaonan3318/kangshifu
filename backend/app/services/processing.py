@@ -40,7 +40,7 @@ class ProcessingService:
             job.started_at = None
             job.error_code = "WORKER_INTERRUPTED"
             job.error_message = "后台处理被中断，已重新排队"
-            if job.document.status != DocumentStatus.DELETING:
+            if job.document.status != DocumentStatus.DELETING and job.document.deleted_at is None:
                 job.document.status = DocumentStatus.PENDING if job.job_type == JobType.PARSE else DocumentStatus.PARSED
         self.session.commit()
         return len(jobs)
@@ -54,10 +54,10 @@ class ProcessingService:
         if not job:
             self.session.rollback()
             return None
-        if job.document.status == DocumentStatus.DELETING:
+        if job.document.status == DocumentStatus.DELETING or job.document.deleted_at is not None:
             job.status = JobStatus.FAILED
-            job.error_code = "DOCUMENT_DELETING"
-            job.error_message = "文档正在删除"
+            job.error_code = "DOCUMENT_UNAVAILABLE"
+            job.error_message = "文档已删除，后台任务不再执行"
             job.finished_at = datetime.now(UTC)
             self.session.commit()
             return None
@@ -73,7 +73,7 @@ class ProcessingService:
         """按任务类型执行解析或索引，并将异常转换成可展示的失败状态。"""
         try:
             document = self.session.get(Document, job.document_id)
-            if not document or document.status == DocumentStatus.DELETING:
+            if not document or document.status == DocumentStatus.DELETING or document.deleted_at is not None:
                 return
             if job.job_type == JobType.INDEX:
                 self._index(document, job)
@@ -151,6 +151,11 @@ class ProcessingService:
         document.embedding_model = self.settings.embedding_model
         document.embedding_version = "1"
         document.status = DocumentStatus.READY
+        # 新版本完全可检索后再停用上一版本，避免处理失败造成知识空窗。
+        if document.previous_version_id:
+            previous = self.session.get(Document, document.previous_version_id)
+            if previous:
+                previous.enabled = False
         job = self.session.get(ProcessingJob, job.id)
         job.status = JobStatus.SUCCEEDED
         job.finished_at = datetime.now(UTC)

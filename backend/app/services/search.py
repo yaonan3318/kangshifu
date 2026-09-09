@@ -61,18 +61,19 @@ class SearchService:
         vector = self._vector_candidates(processed.retrieval_text, request)
         timings["vector"] = self._milliseconds(mark)
         candidates = self._fuse(keyword, vector, processed.normalized)
-        stages = {
+        stages = ({
             "keyword": [self._stage_item(item, item.keyword_score or 0.0) for item in keyword],
             "vector": [self._stage_item(item, item.vector_score or 0.0) for item in vector],
             "fusion": [self._stage_item(item, item.final_score) for item in candidates],
-        }
+        } if request.include_stages else {})
 
         mark = perf_counter()
         ranked, warning, mode = self._rerank(processed.normalized, candidates)
         timings["rerank"] = self._milliseconds(mark)
         accepted = self._accept(ranked, request.limit)
-        stages["rerank"] = [self._stage_item(item, item.rerank_score if item.rerank_score is not None else item.final_score) for item in ranked]
-        stages["final"] = [self._stage_item(item, item.final_score) for item in accepted]
+        if request.include_stages:
+            stages["rerank"] = [self._stage_item(item, item.rerank_score if item.rerank_score is not None else item.final_score) for item in ranked]
+            stages["final"] = [self._stage_item(item, item.final_score) for item in accepted]
         reason = None
         if not accepted:
             reason = "没有片段达到可靠答案阈值，请调整问题或检查资料状态"

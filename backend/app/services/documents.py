@@ -36,11 +36,18 @@ class DocumentService:
 
             target_base = knowledge_base_id or DEFAULT_KNOWLEDGE_BASE_ID
             self._knowledge_base(target_base)
+            previous = self.session.scalar(select(Document).where(
+                Document.knowledge_base_id == target_base,
+                Document.relative_path == staged.original_name,
+                Document.deleted_at.is_(None),
+            ).order_by(Document.version_number.desc()).limit(1))
             document = Document(
                 id=uuid.uuid4(), original_name=staged.original_name,
                 stored_path="", extension=file_type.extension, mime_type=file_type.mime_type,
                 size_bytes=staged.size_bytes, sha256=staged.sha256, status=DocumentStatus.PENDING,
                 knowledge_base_id=target_base, relative_path=staged.original_name,
+                previous_version_id=previous.id if previous else None,
+                version_number=(previous.version_number + 1) if previous else 1,
             )
             promoted_path = self.storage.promote(staged, document.id, file_type.extension)
             document.stored_path = promoted_path
