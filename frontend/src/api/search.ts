@@ -2,7 +2,7 @@ import { ApiError } from './documents'
 import type { ApiErrorBody } from '../types/documents'
 import type { SearchResponse } from '../types/search'
 
-export interface SearchFilters { extension: string; documentName: string; createdFrom: string; createdTo: string }
+export interface SearchFilters { extension: string; documentName: string; createdFrom: string; createdTo: string; knowledgeBaseId?:string; tags?:string[] }
 
 export async function searchDocuments(query: string, filters: SearchFilters): Promise<SearchResponse> {
   const response = await fetch('/api/search', {
@@ -11,6 +11,7 @@ export async function searchDocuments(query: string, filters: SearchFilters): Pr
     body: JSON.stringify({
       query, extension: filters.extension || null, document_name: filters.documentName.trim() || null,
       created_from: filters.createdFrom || null, created_to: filters.createdTo || null, limit: 10,
+      knowledge_base_id: filters.knowledgeBaseId || null, tags: filters.tags || [],
     }),
   })
   if (response.ok) return response.json()
