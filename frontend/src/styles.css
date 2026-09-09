@@ -539,3 +539,20 @@ td small { color: #8a9388; font-family: ui-monospace, monospace; }
 .form-actions button.secondary-action { background: #fff; border: 1px solid #cad3c7; color: #324a33; }
 .assistant-hint { color: #8a9489; font-size: 12px; line-height: 1.6; }
 @media (max-width: 900px) { .assistant-grid { grid-template-columns: 1fr; } }
+/* 登录与用户信息 */
+.login-boot { display: grid; place-items: center; min-height: 70vh; color: #6b7866; }
+.login-shell { display: grid; place-items: center; min-height: 100vh; padding: 24px; }
+.login-panel { width: min(430px, 100%); padding: 38px 34px; border: 1px solid #d8dfd5; border-radius: 22px; background: rgba(255,255,255,.92); box-shadow: 0 24px 60px rgba(45,60,43,.1); text-align: center; }
+.login-avatar { display: grid; place-items: center; width: 60px; height: 60px; margin: 0 auto 14px; border-radius: 18px; background: linear-gradient(135deg,#2c4a2e,#4d8152); color:#fff; font-size: 28px; font-weight: 700; }
+.login-panel h1 { margin: 0 0 8px; font-family: Georgia, "Songti SC", serif; font-weight: 400; font-size: 26px; }
+.login-panel > p { margin: 0 0 18px; color: #6b7866; font-size: 13px; line-height: 1.6; }
+.login-form { display: grid; gap: 12px; text-align: left; }
+.login-form label { display: grid; gap: 6px; color: #55624f; font-size: 13px; }
+.login-form input { min-height: 46px; border: 1px solid #cdd5ca; border-radius: 11px; background: #fff; padding: 0 12px; font: inherit; }
+.login-form button { min-height: 46px; border: 0; border-radius: 11px; background: #263a27; color: #fff; font-weight: 600; cursor: pointer; }
+.login-form button:disabled { opacity: .5; cursor: default; }
+.login-panel small { display: block; margin-top: 16px; color: #94a092; font-size: 12px; line-height: 1.6; }
+.top-user { position: fixed; z-index: 20; top: 12px; right: 18px; display: flex; align-items: center; gap: 8px; }
+.user-chip { padding: 5px 11px; border-radius: 999px; background: rgba(255,255,255,.9); border: 1px solid #d8dfd5; color: #38503a; font-size: 12px; box-shadow: 0 4px 14px rgba(45,60,43,.06); }
+.user-chip em { margin-left: 5px; font-style: normal; color: #9a6a17; }
+.logout-button { border: 0; background: transparent; color: #6b7866; cursor: pointer; text-decoration: underline; font-size: 12px; }

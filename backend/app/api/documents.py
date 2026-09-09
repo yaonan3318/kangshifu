@@ -3,12 +3,15 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.db import get_session
+from app.models import DocumentAcl, DocumentVisibility
 from app.models.document import DocumentStatus
 from app.schemas.documents import DocumentChunkResponse, DocumentContentResponse, DocumentDeleteRequest, DocumentFilters, DocumentListResponse, DocumentResponse, DocumentUpdateRequest
 from app.services.documents import DocumentService
@@ -18,11 +21,12 @@ router = APIRouter(prefix="/api/documents", tags=["documents"])
 
 
 def get_document_service(
+    request: Request,
     session: Annotated[Session, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> DocumentService:
-    """组合请求级数据库 Session 与磁盘存储，供路由函数注入使用。"""
-    return DocumentService(session, ManagedStorage(settings))
+    """组合请求级数据库 Session、磁盘存储与当前用户，供路由函数注入使用。"""
+    return DocumentService(session, ManagedStorage(settings), user=getattr(request.state, "auth_user", None))
 
 
 @router.post("/upload", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
@@ -153,3 +157,41 @@ def purge_document(document_id: uuid.UUID, service: Annotated[DocumentService, D
     """永久删除回收站中的文档及原始附件。"""
     service.purge(document_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+class AclEntry(BaseModel):
+    subject_type: str = Field(pattern="^(DEPARTMENT|ROLE|USER)$")
+    subject_id: uuid.UUID
+    permission: str = Field(default="READ", pattern="^(READ|MANAGE)$")
+
+
+class AccessPayload(BaseModel):
+    visibility: str | None = Field(default=None, pattern="^(PRIVATE|COMPANY|DEPARTMENT|ROLE|USER)$")
+    acl: list[AclEntry] | None = None
+
+
+@router.put("/{document_id}/access", response_model=DocumentResponse)
+def set_document_access(
+    document_id: uuid.UUID,
+    body: AccessPayload,
+    service: Annotated[DocumentService, Depends(get_document_service)],
+) -> DocumentResponse:
+    """设置文档可见级别与 ACL；仅上传人、管理员或 MANAGE 授权者可操作。"""
+    visibility = DocumentVisibility(body.visibility) if body.visibility else None
+    acl = [entry.model_dump() for entry in body.acl] if body.acl is not None else None
+    return document_response(service.set_access(document_id, visibility=visibility, acl=acl), service)
+
+
+@router.get("/{document_id}/acl")
+def get_document_acl(
+    document_id: uuid.UUID,
+    session: Annotated[Session, Depends(get_session)],
+    service: Annotated[DocumentService, Depends(get_document_service)],
+) -> dict:
+    """读取文档访问控制条目（读取前先校验文档可见性）。"""
+    service.get(document_id)
+    rows = session.scalars(select(DocumentAcl).where(DocumentAcl.document_id == document_id)).all()
+    return {"items": [{
+        "id": str(item.id), "subject_type": item.subject_type.value,
+        "subject_id": str(item.subject_id), "permission": item.permission.value,
+    } for item in rows]}

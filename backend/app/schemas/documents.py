@@ -29,6 +29,8 @@ class DocumentResponse(BaseModel):
     version_number: int
     previous_version_id: uuid.UUID | None
     enabled: bool
+    visibility: str
+    owner_user_id: uuid.UUID | None
     deleted_at: datetime | None
     deleted_reason: str | None
     metadata_json: dict

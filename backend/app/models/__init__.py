@@ -1,6 +1,10 @@
 """集中导出 SQLAlchemy ORM 模型，便于业务层和 Alembic 加载。"""
 
 from app.models.document import Document, DocumentStatus
+from app.models.identity import (
+    AclPermission, AuthSession, Department, DocumentAcl, DocumentVisibility,
+    Role, SubjectType, User, user_roles,
+)
 from app.models.document_chunk import DocumentChunk
 from app.models.processing_job import JobStatus, JobType, ProcessingJob
 from app.models.harness import ApprovalStatus, HarnessApproval, HarnessStep, HarnessStepStatus, HarnessTask, HarnessTaskStatus
@@ -18,4 +22,6 @@ __all__ = [
     "DEFAULT_KNOWLEDGE_BASE_ID", "KnowledgeBase", "Tag", "document_tags", "RetrievalTestCase", "RetrievalTestRun",
     "ChatMessage", "ChatMessageRole", "ChatMessageSource", "ChatMessageStatus", "ChatProvider", "ChatSession",
     "DEFAULT_ASSISTANT_ID", "Assistant", "assistant_knowledge_bases",
+    "AclPermission", "AuthSession", "Department", "DocumentAcl", "DocumentVisibility",
+    "Role", "SubjectType", "User", "user_roles",
 ]

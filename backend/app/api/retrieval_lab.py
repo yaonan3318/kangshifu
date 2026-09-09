@@ -3,7 +3,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
@@ -22,8 +22,9 @@ def get_service(session: Annotated[Session, Depends(get_session)], settings: Ann
 
 
 @router.post("/inspect", response_model=RetrievalInspectResponse)
-def inspect(body: RetrievalInspectRequest, session: Annotated[Session, Depends(get_session)], settings: Annotated[Settings, Depends(get_settings)]):
-    outcome = SearchService(session, settings).search_with_diagnostics(SearchRequest(
+def inspect(body: RetrievalInspectRequest, http_request: Request, session: Annotated[Session, Depends(get_session)], settings: Annotated[Settings, Depends(get_settings)]):
+    user = getattr(http_request.state, "auth_user", None)
+    outcome = SearchService(session, settings, user=user).search_with_diagnostics(SearchRequest(
         query=body.query, knowledge_base_id=body.knowledge_base_id, limit=body.limit, include_stages=True,
     ))
     return RetrievalInspectResponse(items=outcome.items, diagnostics=outcome.diagnostics)

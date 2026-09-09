@@ -16,6 +16,7 @@ from app.services.keywords import keyword_text
 from app.services.query_processing import QueryProcessor
 from app.services.reranking import Reranker
 from app.services.retrieval_policy import active_retrieval_clauses
+from app.services.permissions import PermissionResolver
 
 
 @dataclass
@@ -37,12 +38,14 @@ class SearchOutcome:
 
 
 class SearchService:
-    def __init__(self, session: Session, settings: Settings):
+    def __init__(self, session: Session, settings: Settings, user=None):
         self.session = session
         self.settings = settings
         self.embeddings = EmbeddingService(settings)
         self.processor = QueryProcessor(settings.search_synonyms)
         self.reranker = Reranker(settings)
+        # 普通用户只检索对其可见的资料；管理员/无用户上下文不限制。
+        self.resolver = PermissionResolver(session, user) if user is not None else None
 
     def search(self, request: SearchRequest) -> list[SearchResult]:
         return self.search_with_diagnostics(request).items
@@ -89,6 +92,8 @@ class SearchService:
 
     def _base_clauses(self, request: SearchRequest):
         clauses = active_retrieval_clauses()
+        if self.resolver is not None:
+            clauses.extend(self.resolver.visibility_clauses())
         if request.extension:
             clauses.append(Document.extension == request.extension.lower().lstrip("."))
         if request.document_name:

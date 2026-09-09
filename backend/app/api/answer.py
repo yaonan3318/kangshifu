@@ -26,11 +26,12 @@ logger = logging.getLogger(__name__)
 
 
 def get_rag_service(
+    request: Request,
     session: Annotated[Session, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> RagService:
     """为当前请求创建 RAG 编排服务，并复用请求级数据库 Session。"""
-    return RagService(session, settings)
+    return RagService(session, settings, user=getattr(request.state, "auth_user", None))
 
 
 def encode_sse(event: AnswerEvent) -> str:
@@ -69,14 +70,15 @@ async def answer_stream(
     会话由前端传入 session_id；未传入时自动新建会话并把首问作为标题。
     """
     # 提前校验会话存在（归档会话也可继续提问），避免进入流式阶段后才发现 404。
-    chat = ChatService(session)
+    chat_user = getattr(request.state, "auth_user", None)
+    chat = ChatService(session, user=chat_user)
     if body.session_id is not None:
         try:
             chat.get(body.session_id, include_archived=True)
         except KeyError as exc:
             raise AppError("CHAT_SESSION_NOT_FOUND", "会话不存在", 404) from exc
 
-    recorder = AnswerRecorder(session)
+    recorder = AnswerRecorder(session, user=chat_user)
     if body.regenerate_message_id is not None:
         try:
             prepared = recorder.begin_regenerate(body.regenerate_message_id)

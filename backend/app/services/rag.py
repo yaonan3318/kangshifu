@@ -37,9 +37,9 @@ def _seconds_since(started: float) -> float:
 class RagService:
     """把检索和两种 LLM 串联成可降级、可显示引用的流式问答。"""
 
-    def __init__(self, session: Session, settings: Settings):
+    def __init__(self, session: Session, settings: Settings, user=None):
         self.settings = settings
-        self.search_service = SearchService(session, settings)
+        self.search_service = SearchService(session, settings, user=user)
         self.ollama = OllamaClient(settings)
         self.deepseek = DeepSeekClient(settings)
 

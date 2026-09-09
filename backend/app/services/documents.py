@@ -10,18 +10,32 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.errors import DocumentAlreadyProcessing, DocumentNotFound, DuplicateDocument
 from app.errors import AppError
-from app.models import DEFAULT_KNOWLEDGE_BASE_ID, Document, DocumentChunk, DocumentStatus, JobStatus, JobType, KnowledgeBase, ProcessingJob, Tag
+from app.models import (
+    AclPermission, DEFAULT_KNOWLEDGE_BASE_ID, Document, DocumentAcl, DocumentChunk, DocumentStatus,
+    DocumentVisibility, JobStatus, JobType, KnowledgeBase, ProcessingJob, SubjectType, Tag,
+)
 from app.schemas.documents import DocumentFilters, DocumentUpdateRequest
 from app.services.file_types import detect_allowed_type
 from app.services.managed_storage import ManagedStorage
+from app.services.permissions import PermissionResolver, require_manage, require_read
 
 
 class DocumentService:
     """实现文档用例，并保证数据库记录和受管磁盘文件尽量保持一致。"""
 
-    def __init__(self, session: Session, storage: ManagedStorage):
+    def __init__(self, session: Session, storage: ManagedStorage, user=None):
         self.session = session
         self.storage = storage
+        self.resolver = PermissionResolver(session, user) if user is not None else None
+        self.user = self.resolver.user if self.resolver else None
+
+    def _check_read(self, document: Document) -> None:
+        if self.resolver is not None:
+            require_read(self.resolver, document)
+
+    def _check_manage(self, document: Document) -> None:
+        if self.resolver is not None:
+            require_manage(self.resolver, document)
 
     def upload(self, file: UploadFile, knowledge_base_id: uuid.UUID | None = None) -> Document:
         """暂存并校验文件，按 SHA-256 去重，入库后创建异步解析任务。"""
@@ -48,6 +62,7 @@ class DocumentService:
                 knowledge_base_id=target_base, relative_path=staged.original_name,
                 previous_version_id=previous.id if previous else None,
                 version_number=(previous.version_number + 1) if previous else 1,
+                owner_user_id=self.user.id if self.user else None,
             )
             promoted_path = self.storage.promote(staged, document.id, file_type.extension)
             document.stored_path = promoted_path
@@ -88,6 +103,8 @@ class DocumentService:
             clauses.append(Document.knowledge_base_id == filters.knowledge_base_id)
         if filters.tag:
             clauses.append(Document.tags.any(Tag.name == filters.tag.strip()))
+        if self.resolver is not None:
+            clauses.extend(self.resolver.visibility_clauses())
         count = self.session.scalar(select(func.count()).select_from(Document).where(*clauses)) or 0
         documents = list(self.session.scalars(
             select(Document).options(selectinload(Document.tags)).where(*clauses).order_by(Document.created_at.desc(), Document.id.desc())
@@ -104,16 +121,19 @@ class DocumentService:
         ).where(*clauses))
         if not document:
             raise DocumentNotFound()
+        self._check_read(document)
         return document
 
     def delete(self, document_id: uuid.UUID, reason: str | None = None) -> None:
         document = self.get(document_id)
+        self._check_manage(document)
         document.deleted_at = datetime.now(UTC)
         document.deleted_reason = reason.strip() if reason else None
         self.session.commit()
 
     def restore(self, document_id: uuid.UUID) -> Document:
         document = self.get(document_id, include_deleted=True)
+        self._check_manage(document)
         if document.deleted_at is None:
             raise AppError("DOCUMENT_NOT_DELETED", "文档不在回收站中", 409)
         document.deleted_at = None
@@ -124,6 +144,7 @@ class DocumentService:
 
     def purge(self, document_id: uuid.UUID) -> None:
         document = self.get(document_id, include_deleted=True)
+        self._check_manage(document)
         if document.deleted_at is None:
             raise AppError("DOCUMENT_NOT_DELETED", "只有回收站中的文档才能永久删除", 409)
         try:
@@ -140,6 +161,7 @@ class DocumentService:
 
     def set_enabled(self, document_id: uuid.UUID, enabled: bool) -> Document:
         document = self.get(document_id)
+        self._check_manage(document)
         document.enabled = enabled
         self.session.commit()
         self.session.refresh(document)
@@ -147,6 +169,7 @@ class DocumentService:
 
     def update(self, document_id: uuid.UUID, body: DocumentUpdateRequest) -> Document:
         document = self.get(document_id)
+        self._check_manage(document)
         if body.knowledge_base_id is not None and body.knowledge_base_id != document.knowledge_base_id:
             self._knowledge_base(body.knowledge_base_id)
             document.knowledge_base_id = body.knowledge_base_id
@@ -179,6 +202,31 @@ class DocumentService:
     def chunk_count(self, document_id: uuid.UUID) -> int:
         return self.session.scalar(select(func.count()).select_from(DocumentChunk).where(DocumentChunk.document_id == document_id)) or 0
 
+    def set_access(
+        self, document_id: uuid.UUID,
+        visibility: DocumentVisibility | None = None,
+        acl: list[dict] | None = None,
+    ) -> Document:
+        """设置文档可见级别与访问控制表；只允许上传人、管理员或被授予 MANAGE 的用户。"""
+        document = self.get(document_id)
+        self._check_manage(document)
+        if visibility is not None:
+            document.visibility = visibility
+        if acl is not None:
+            self.session.execute(
+                delete(DocumentAcl).where(DocumentAcl.document_id == document.id)
+            )
+            for entry in acl:
+                subject_type = SubjectType(entry.get("subject_type"))
+                permission = AclPermission(entry.get("permission") or "READ")
+                self.session.add(DocumentAcl(
+                    document_id=document.id, subject_type=subject_type,
+                    subject_id=uuid.UUID(str(entry.get("subject_id"))), permission=permission,
+                ))
+        self.session.commit()
+        self.session.refresh(document)
+        return self.get(document.id)
+
     def _knowledge_base(self, knowledge_base_id: uuid.UUID) -> KnowledgeBase:
         value = self.session.scalar(select(KnowledgeBase).where(KnowledgeBase.id == knowledge_base_id, KnowledgeBase.enabled.is_(True)))
         if not value:
@@ -205,6 +253,7 @@ class DocumentService:
 
     def reprocess(self, document_id: uuid.UUID, confirm_overwrite: bool = False) -> Document:
         document = self.get(document_id)
+        self._check_manage(document)
         edited = self.session.scalar(select(DocumentChunk.id).where(
             DocumentChunk.document_id == document_id, DocumentChunk.manually_edited.is_(True)
         ).limit(1))

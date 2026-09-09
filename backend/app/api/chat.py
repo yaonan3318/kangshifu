@@ -3,7 +3,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -21,8 +21,11 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 DEFAULT_PAGE_SIZE = 50
 
 
-def get_chat_service(session: Annotated[Session, Depends(get_session)]) -> ChatService:
-    return ChatService(session)
+def get_chat_service(
+    request: Request,
+    session: Annotated[Session, Depends(get_session)],
+) -> ChatService:
+    return ChatService(session, user=getattr(request.state, "auth_user", None))
 
 
 def _source_payload(source: ChatMessageSource, service: ChatService) -> dict:

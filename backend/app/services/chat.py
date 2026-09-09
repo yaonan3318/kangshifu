@@ -25,13 +25,16 @@ def default_title_for(question: str, limit: int = 40) -> str:
 class ChatService:
     """围绕 chat_sessions/chat_messages 的读接口与生命周期管理。"""
 
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, user=None):
         self.session = session
+        self.user = user
 
     def create(self, title: str | None = None, assistant_id: uuid.UUID | None = None) -> ChatSession:
         session = ChatSession(title=(title or DEFAULT_TITLE).strip() or DEFAULT_TITLE)
         if assistant_id is not None:
             session.assistant_id = assistant_id
+        if self.user is not None:
+            session.user_id = self.user.id
         self.session.add(session)
         self.session.commit()
         self.session.refresh(session)
@@ -43,6 +46,8 @@ class ChatService:
             statement = statement.where(ChatSession.archived_at.is_(None))
         session = self.session.scalar(statement)
         if session is None:
+            raise KeyError("会话不存在")
+        if self.user is not None and not self.user.is_super_admin and session.user_id != self.user.id:
             raise KeyError("会话不存在")
         return session
 
@@ -57,6 +62,8 @@ class ChatService:
             filters.append(ChatSession.archived_at.is_not(None))
         elif archived is None:
             filters.append(ChatSession.archived_at.is_(None))
+        if self.user is not None and not self.user.is_super_admin:
+            filters.append(ChatSession.user_id == self.user.id)
         base = select(ChatSession).where(*filters)
         total = self.session.scalar(select(func.count()).select_from(base.subquery())) or 0
         rows = self.session.scalars(
@@ -155,14 +162,15 @@ class ChatService:
 class AnswerRecorder:
     """把一次流式问答写入数据库：用户问题立即落库，助手答案完成后更新并保存引用快照。"""
 
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, user=None):
         self.session = session
+        self.user = user
         self.session_row: ChatSession | None = None
         self.assistant: ChatMessage | None = None
 
     def prepare(self, question: str, session_id: uuid.UUID | None, assistant_id: uuid.UUID | None = None) -> ChatSession:
         """创建/复用会话并写入用户消息与处于生成中的助手消息。"""
-        service = ChatService(self.session)
+        service = ChatService(self.session, user=self.user)
         if session_id is None:
             self.session_row = service.create(default_title_for(question))
         else:

@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     # 相同问题在资料版本与检索配置未变化时可命中内存回答缓存；关闭可节省内存。
     answer_cache_enabled: bool = True
     answer_cache_size: int = 48
+    # 本地账号引导配置：首次启动自动创建管理员账号，请上线前修改默认密码。
+    admin_username: str = "admin"
+    admin_password: str = "admin123"
+    auth_session_days: int = 7
+    auth_login_rate_limit: int = 10
+    auth_login_rate_window_seconds: int = 300
     k8s_allowed_contexts: str = ""
     harness_max_steps: int = 8
     harness_timeout_seconds: int = 300
