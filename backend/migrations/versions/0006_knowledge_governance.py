@@ -1,5 +1,7 @@
 """Add knowledge governance, chunk editing, and retrieval evaluation tables."""
 
+import uuid
+
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
@@ -10,7 +12,12 @@ down_revision = "0005_upload_batches"
 branch_labels = None
 depends_on = None
 
-DEFAULT_KNOWLEDGE_BASE_ID = "00000000-0000-0000-0000-000000000001"
+DEFAULT_KNOWLEDGE_BASE_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+
+def default_knowledge_base_id_parameter():
+    """为 text SQL 显式声明 UUID，避免固定字符串被绑定成 VARCHAR。"""
+    return sa.bindparam("id", value=DEFAULT_KNOWLEDGE_BASE_ID, type_=postgresql.UUID(as_uuid=True))
 
 
 def upgrade() -> None:
@@ -29,10 +36,10 @@ def upgrade() -> None:
     op.execute(sa.text(
         "INSERT INTO knowledge_bases (id, name, description, enabled) "
         "VALUES (:id, '默认知识库', '升级前及未指定知识库的公司资料', true)"
-    ).bindparams(id=DEFAULT_KNOWLEDGE_BASE_ID))
+    ).bindparams(default_knowledge_base_id_parameter()))
 
     op.add_column("upload_batches", sa.Column("knowledge_base_id", postgresql.UUID(as_uuid=True), nullable=True))
-    op.execute(sa.text("UPDATE upload_batches SET knowledge_base_id = :id").bindparams(id=DEFAULT_KNOWLEDGE_BASE_ID))
+    op.execute(sa.text("UPDATE upload_batches SET knowledge_base_id = :id").bindparams(default_knowledge_base_id_parameter()))
     op.alter_column("upload_batches", "knowledge_base_id", nullable=False)
     op.create_foreign_key("fk_upload_batches_knowledge_base", "upload_batches", "knowledge_bases", ["knowledge_base_id"], ["id"], ondelete="RESTRICT")
     op.create_index("ix_upload_batches_knowledge_base_id", "upload_batches", ["knowledge_base_id"])
@@ -45,7 +52,7 @@ def upgrade() -> None:
     op.add_column("documents", sa.Column("deleted_at", sa.DateTime(timezone=True)))
     op.add_column("documents", sa.Column("deleted_reason", sa.Text()))
     op.add_column("documents", sa.Column("metadata", postgresql.JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")))
-    op.execute(sa.text("UPDATE documents SET knowledge_base_id = :id").bindparams(id=DEFAULT_KNOWLEDGE_BASE_ID))
+    op.execute(sa.text("UPDATE documents SET knowledge_base_id = :id").bindparams(default_knowledge_base_id_parameter()))
     op.alter_column("documents", "knowledge_base_id", nullable=False)
     op.create_foreign_key("fk_documents_knowledge_base", "documents", "knowledge_bases", ["knowledge_base_id"], ["id"], ondelete="RESTRICT")
     op.create_foreign_key("fk_documents_previous_version", "documents", "documents", ["previous_version_id"], ["id"], ondelete="SET NULL")
