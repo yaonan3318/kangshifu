@@ -4,8 +4,8 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, Enum, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -34,6 +34,7 @@ class Document(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     original_name: Mapped[str] = mapped_column(String(1024))
     stored_path: Mapped[str] = mapped_column(String(2048))
+    relative_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     extension: Mapped[str] = mapped_column(String(16), index=True)
     mime_type: Mapped[str] = mapped_column(String(255))
     size_bytes: Mapped[int] = mapped_column(BigInteger)
@@ -45,14 +46,30 @@ class Document(Base):
     parser_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     embedding_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     embedding_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="RESTRICT"), index=True
+    )
+    version_number: Mapped[int] = mapped_column(Integer, default=1)
+    previous_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    deleted_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     jobs: Mapped[list["ProcessingJob"]] = relationship(back_populates="document", cascade="all, delete-orphan")
     chunks: Mapped[list["DocumentChunk"]] = relationship(back_populates="document", cascade="all, delete-orphan")
     batch_files: Mapped[list["BatchFile"]] = relationship(back_populates="document")
+    knowledge_base: Mapped["KnowledgeBase"] = relationship(back_populates="documents")
+    tags: Mapped[list["Tag"]] = relationship(secondary="document_tags", back_populates="documents")
+    previous_version: Mapped["Document | None"] = relationship(remote_side="Document.id", foreign_keys=[previous_version_id])
 
 
 from app.models.processing_job import ProcessingJob  # noqa: E402
 from app.models.document_chunk import DocumentChunk  # noqa: E402
 from app.models.upload_batch import BatchFile  # noqa: E402
+from app.models.knowledge_base import KnowledgeBase  # noqa: E402
+from app.models.tag import Tag  # noqa: E402

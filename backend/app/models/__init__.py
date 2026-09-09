@@ -5,9 +5,13 @@ from app.models.document_chunk import DocumentChunk
 from app.models.processing_job import JobStatus, JobType, ProcessingJob
 from app.models.harness import ApprovalStatus, HarnessApproval, HarnessStep, HarnessStepStatus, HarnessTask, HarnessTaskStatus
 from app.models.upload_batch import BatchFile, BatchProcessingStatus, BatchStatus, BatchUploadStatus, UploadBatch
+from app.models.knowledge_base import DEFAULT_KNOWLEDGE_BASE_ID, KnowledgeBase
+from app.models.tag import Tag, document_tags
+from app.models.retrieval_evaluation import RetrievalTestCase, RetrievalTestRun
 
 __all__ = [
     "ApprovalStatus", "Document", "DocumentStatus", "DocumentChunk", "HarnessApproval", "HarnessStep",
     "HarnessStepStatus", "HarnessTask", "HarnessTaskStatus", "ProcessingJob", "JobStatus", "JobType",
     "BatchFile", "BatchProcessingStatus", "BatchStatus", "BatchUploadStatus", "UploadBatch",
+    "DEFAULT_KNOWLEDGE_BASE_ID", "KnowledgeBase", "Tag", "document_tags", "RetrievalTestCase", "RetrievalTestRun",
 ]
