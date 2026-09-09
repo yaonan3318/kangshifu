@@ -17,7 +17,7 @@ class ChunkService:
         self.session = session
         self.embeddings = EmbeddingService(settings)
 
-    def list(self, document_id: uuid.UUID, page: int, page_size: int) -> tuple[list[DocumentChunk], int]:
+    def list_chunks(self, document_id: uuid.UUID, page: int, page_size: int) -> tuple[list[DocumentChunk], int]:
         self._active_document(document_id)
         clause = DocumentChunk.document_id == document_id
         total = self.session.scalar(select(func.count()).select_from(DocumentChunk).where(clause)) or 0

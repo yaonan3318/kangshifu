@@ -24,7 +24,7 @@ def get_service(
 
 @router.get("/documents/{document_id}/chunks", response_model=ChunkListResponse)
 def list_chunks(document_id: uuid.UUID, service: Annotated[ChunkService, Depends(get_service)], page: Annotated[int, Query(ge=1)] = 1, page_size: Annotated[int, Query(ge=1, le=100)] = 25):
-    items, total = service.list(document_id, page, page_size)
+    items, total = service.list_chunks(document_id, page, page_size)
     return ChunkListResponse(items=[ChunkResponse.model_validate(item) for item in items], page=page, page_size=page_size, total=total)
 
 
