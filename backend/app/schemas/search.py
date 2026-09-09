@@ -40,6 +40,15 @@ class SearchResult(BaseModel):
     final_score: float
 
 
+class RetrievalStageItem(BaseModel):
+    chunk_id: uuid.UUID
+    document_id: uuid.UUID
+    document_name: str
+    sequence_number: int
+    score: float
+    content_preview: str
+
+
 class SearchDiagnostics(BaseModel):
     normalized_query: str
     expanded_terms: list[str]
@@ -47,6 +56,7 @@ class SearchDiagnostics(BaseModel):
     warning: str | None = None
     no_answer_reason: str | None = None
     timings_ms: dict[str, float] = Field(default_factory=dict)
+    stages: dict[str, list[RetrievalStageItem]] = Field(default_factory=dict)
 
 
 class SearchResponse(BaseModel):
