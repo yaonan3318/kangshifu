@@ -580,3 +580,15 @@ td small { color: #8a9388; font-family: ui-monospace, monospace; }
 .feedback-admin-actions { display: flex; gap: 8px; align-items: center; }
 .feedback-admin-actions input { flex: 1; min-height: 38px; border: 1px solid #ccd5c9; border-radius: 8px; padding: 0 10px; font: inherit; }
 .feedback-admin-resolved { color: #6f8b6f; font-size: 12px; }
+.metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.metric-grid > div { display: grid; gap: 5px; padding: 14px; border-radius: 12px; background: #eef3ec; }
+.metric-grid b { font-size: 24px; color: #1f3523; }
+.metric-grid span { color: #6a7a67; font-size: 12px; }
+.stats-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 22px; }
+.stats-columns .library-panel { margin-top: 0; }
+.stats-title { margin: 4px 0 12px; font-size: 20px; font-weight: 600; }
+.stats-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.stats-list li { display: flex; justify-content: space-between; gap: 14px; padding: 10px 12px; border: 1px solid #e0e5de; border-radius: 10px; background: #fff; font-size: 13px; }
+.stats-list li span { overflow-wrap: anywhere; color: #2f3d30; }
+.stats-list li em { flex: 0 0 auto; color: #7c877b; font-style: normal; }
+@media (max-width: 800px) { .stats-columns { grid-template-columns: 1fr; } }
