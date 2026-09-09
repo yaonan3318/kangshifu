@@ -1,6 +1,6 @@
 import { ApiError } from './documents'
 import type { ApiErrorBody } from '../types/documents'
-import type { AnswerEvent, AnswerMessage, AnswerStatus } from '../types/answer'
+import type { AnswerEvent, AnswerStatus, AnswerTurn } from '../types/answer'
 
 export async function getAnswerStatus(): Promise<AnswerStatus> {
   const response = await fetch('/api/answer/status')
@@ -11,24 +11,35 @@ export async function getAnswerStatus(): Promise<AnswerStatus> {
 
 export interface StreamAnswerInput {
   question: string
+  sessionId?: string
+  regenerateMessageId?: string
+  knowledgeBaseId?: string
   useDeepseek: boolean
-  history: Pick<AnswerMessage, 'question' | 'answer'>[]
+  history: Pick<AnswerTurn, 'question' | 'answer'>[]
   useHarness: boolean
   k8sContext?: string
   k8sNamespace?: string
   deploymentYaml?: string
 }
 
+export interface StreamAnswerOutcome {
+  sessionId: string | null
+  messageId: string | null
+}
+
 export async function streamAnswer(
   input: StreamAnswerInput,
   signal: AbortSignal,
   onEvent: (event: AnswerEvent) => void,
-): Promise<void> {
+): Promise<StreamAnswerOutcome> {
   const response = await fetch('/api/answer/stream', {
     method: 'POST', signal,
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
     body: JSON.stringify({
       question: input.question,
+      session_id: input.sessionId || null,
+      regenerate_message_id: input.regenerateMessageId || null,
+      knowledge_base_id: input.knowledgeBaseId || null,
       use_deepseek: input.useDeepseek,
       use_harness: input.useHarness,
       k8s_context: input.k8sContext || null,
@@ -41,8 +52,12 @@ export async function streamAnswer(
     const body = (await response.json().catch(() => ({}))) as ApiErrorBody
     throw new ApiError(body.error?.code ?? 'ANSWER_FAILED', body.error?.message ?? '无法开始问答')
   }
-
+  const outcome: StreamAnswerOutcome = {
+    sessionId: response.headers.get('X-Chat-Session-Id'),
+    messageId: response.headers.get('X-Chat-Message-Id'),
+  }
   await consumeAnswerResponse(response, onEvent)
+  return outcome
 }
 
 export async function consumeAnswerResponse(response: Response, onEvent: (event: AnswerEvent) => void): Promise<void> {

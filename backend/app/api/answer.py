@@ -1,5 +1,10 @@
-"""RAG 问答接口，以 Server-Sent Events (SSE) 持续推送生成结果。"""
+"""RAG 问答接口，以 Server-Sent Events (SSE) 持续推送生成结果。
 
+每次问答会把用户问题和最终助手回答（含引用快照）写入数据库，切换页面或重启
+服务后仍可打开历史会话。助手回答先以 GENERATING 状态落库，结束时统一更新。
+"""
+
+import asyncio
 import logging
 from typing import Annotated
 
@@ -9,9 +14,12 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.db import get_session
+from app.errors import AppError
+from app.models.chat import ChatProvider
 from app.schemas.answer import AnswerEvent, AnswerRequest, AnswerStatusResponse
-from app.services.rag import RagService
+from app.services.chat import AnswerRecorder, ChatService
 from app.services.harness import HarnessService
+from app.services.rag import RagService
 
 router = APIRouter(prefix="/api/answer", tags=["answer"])
 logger = logging.getLogger(__name__)
@@ -30,6 +38,12 @@ def encode_sse(event: AnswerEvent) -> str:
     return f"event: {event.type}\ndata: {event.model_dump_json()}\n\n"
 
 
+def _provider_value(event: AnswerEvent) -> ChatProvider:
+    if event.provider is None:
+        return ChatProvider.LOCAL
+    return ChatProvider(str(event.provider.value))
+
+
 @router.get("/status", response_model=AnswerStatusResponse)
 async def answer_status(service: Annotated[RagService, Depends(get_rag_service)]) -> AnswerStatusResponse:
     """检查本地 Ollama 模型是否就绪以及 DeepSeek 是否已配置。"""
@@ -40,25 +54,89 @@ async def answer_status(service: Annotated[RagService, Depends(get_rag_service)]
 async def answer_stream(
     body: AnswerRequest,
     request: Request,
+    session: Annotated[Session, Depends(get_session)],
     service: Annotated[RagService, Depends(get_rag_service)],
 ) -> StreamingResponse:
-    """先检索内部资料，再流式返回千问答案，并按需用 DeepSeek 替换增强答案。"""
-    async def events():
-        # 客户端关闭页面后尽快停止生成，避免模型继续占用计算资源。
+    """先检索内部资料，再流式返回千问答案，并按需用 DeepSeek 替换增强答案。
+
+    会话由前端传入 session_id；未传入时自动新建会话并把首问作为标题。
+    """
+    # 提前校验会话存在（归档会话也可继续提问），避免进入流式阶段后才发现 404。
+    chat = ChatService(session)
+    if body.session_id is not None:
         try:
-            stream = HarnessService(service.search_service.session, service.settings).start(body) if body.use_harness else service.stream(body)
+            chat.get(body.session_id, include_archived=True)
+        except KeyError as exc:
+            raise AppError("CHAT_SESSION_NOT_FOUND", "会话不存在", 404) from exc
+
+    recorder = AnswerRecorder(session)
+    if body.regenerate_message_id is not None:
+        try:
+            prepared = recorder.begin_regenerate(body.regenerate_message_id)
+        except KeyError as exc:
+            raise AppError("CHAT_MESSAGE_NOT_FOUND", "待重新生成的回答不存在", 404) from exc
+    else:
+        prepared = recorder.prepare(body.question, body.session_id)
+
+    async def events():
+        is_harness = body.use_harness
+        text_parts: list[str] = []
+        sources: list = []
+        finalized = False
+        try:
+            stream = (
+                HarnessService(service.search_service.session, service.settings).start(body)
+                if is_harness
+                else service.stream(body)
+            )
             async for event in stream:
+                # 客户端关闭页面后尽快停止生成，避免模型继续占用计算资源。
                 if await request.is_disconnected():
-                    return
+                    break
+                if event.type == "sources" and event.sources is not None:
+                    sources = event.sources
+                elif event.type == "replace":
+                    text_parts.clear()
+                elif event.type == "delta" and event.text:
+                    text_parts.append(event.text)
+                elif event.type == "done":
+                    content = "".join(text_parts)
+                    recorder.complete(
+                        content,
+                        _provider_value(event),
+                        event.scope.value if event.scope is not None else None,
+                        sources,
+                    )
+                    finalized = True
+                elif event.type == "harness_done":
+                    content = "".join(text_parts)
+                    recorder.complete(content, ChatProvider.HARNESS, "INTERNAL", sources)
+                    finalized = True
+                elif event.type == "error" and event.error:
+                    recorder.mark_failed(
+                        "".join(text_parts),
+                        event.error.get("code", "ANSWER_FAILED"),
+                        event.error.get("message", "问答处理失败"),
+                    )
+                    finalized = True
                 yield encode_sse(event)
-        except Exception as exc:
-            logger.exception("RAG answer stream failed", exc_info=exc)
-            yield encode_sse(AnswerEvent(
-                type="error",
-                error={"code": "ANSWER_FAILED", "message": "问答处理失败，请查看本地后端日志"},
-            ))
+        except asyncio.CancelledError:
+            # 客户端断开或关闭页面会触发取消；把未完成消息标记为已停止。
+            if not finalized:
+                recorder.mark_stopped("".join(text_parts))
+                finalized = True
+            raise
+        finally:
+            if not finalized:
+                recorder.mark_stopped("".join(text_parts))
 
     return StreamingResponse(
         events(), media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "X-Chat-Session-Id": str(prepared.id),
+            "X-Chat-Message-Id": str(recorder.assistant.id) if recorder.assistant else "",
+        },
     )
+

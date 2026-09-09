@@ -8,10 +8,12 @@ from app.models.upload_batch import BatchFile, BatchProcessingStatus, BatchStatu
 from app.models.knowledge_base import DEFAULT_KNOWLEDGE_BASE_ID, KnowledgeBase
 from app.models.tag import Tag, document_tags
 from app.models.retrieval_evaluation import RetrievalTestCase, RetrievalTestRun
+from app.models.chat import ChatMessage, ChatMessageRole, ChatMessageSource, ChatMessageStatus, ChatProvider, ChatSession
 
 __all__ = [
     "ApprovalStatus", "Document", "DocumentStatus", "DocumentChunk", "HarnessApproval", "HarnessStep",
     "HarnessStepStatus", "HarnessTask", "HarnessTaskStatus", "ProcessingJob", "JobStatus", "JobType",
     "BatchFile", "BatchProcessingStatus", "BatchStatus", "BatchUploadStatus", "UploadBatch",
     "DEFAULT_KNOWLEDGE_BASE_ID", "KnowledgeBase", "Tag", "document_tags", "RetrievalTestCase", "RetrievalTestRun",
+    "ChatMessage", "ChatMessageRole", "ChatMessageSource", "ChatMessageStatus", "ChatProvider", "ChatSession",
 ]

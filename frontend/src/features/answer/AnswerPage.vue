@@ -2,11 +2,22 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ApiError } from '../../api/documents'
 import { getAnswerStatus, streamAnswer } from '../../api/answer'
-import type { AnswerMessage, AnswerSource, AnswerStatus } from '../../types/answer'
-import { confirmApproval, getHarnessStatus, getHarnessTask, getNamespaces, rejectApproval, resumeHarness } from '../../api/harness'
+import type { AnswerEvent, AnswerSource, AnswerStatus, AnswerTurn, CitationSource } from '../../types/answer'
+import { listKnowledgeBases } from '../../api/knowledgeBases'
+import type { KnowledgeBaseRecord } from '../../types/knowledgeBases'
+import { getHarnessStatus, getNamespaces, confirmApproval, getHarnessTask, rejectApproval, resumeHarness } from '../../api/harness'
 import type { HarnessStatus } from '../../types/harness'
+import { archiveChatSession, createChatSession, deleteChatSession, getChatSession, listChatSessions, renameChatSession, restoreChatSession } from '../../api/chat'
+import type { ChatMessageRecord, ChatSessionDetail, ChatSessionItem } from '../../types/chat'
+import type { HarnessApproval } from '../../types/answer'
+import MarkdownView from '../../components/MarkdownView.vue'
+import SessionSidebar from './SessionSidebar.vue'
+import ReferenceDrawer from './ReferenceDrawer.vue'
 import HarnessTimeline from './HarnessTimeline.vue'
 import HarnessApproval from './HarnessApproval.vue'
+
+const ACTIVE_SESSION_KEY = 'company-search-active-session'
+const DRAFT_KEY = 'company-search-draft'
 
 const question = ref('')
 const useDeepseek = ref(false)
@@ -17,20 +28,46 @@ const selectedNamespace = ref('default')
 const namespaces = ref<string[]>([])
 const approvalBusy = ref(false)
 const deploymentYaml = ref('')
+const advancedOpen = ref(false)
+const showHarnessAdvanced = computed(() => useHarness.value || advancedOpen.value)
 const status = ref<AnswerStatus | null>(null)
 const statusError = ref('')
-const messages = ref<AnswerMessage[]>([])
-const activeController = ref<AbortController | null>(null)
-const conversationEnd = ref<HTMLElement | null>(null)
-const composer = ref<HTMLElement | null>(null)
-const composerHeight = ref(190)
-const shellStyle = computed(() => ({ paddingBottom: `${composerHeight.value + 36}px` }))
-let composerObserver: ResizeObserver | null = null
+const knowledgeBases = ref<KnowledgeBaseRecord[]>([])
+const knowledgeBaseId = ref('')
 
-const stageLabels = {
-  retrieving: '正在检索公司资料…',
-  local_generating: '千问正在根据资料生成答案…',
-  deepseek_enhancing: 'DeepSeek 正在检查并合并答案…',
+const sessions = ref<ChatSessionItem[]>([])
+const sessionsLoading = ref(false)
+const sessionError = ref('')
+const showArchived = ref(false)
+const sessionSearch = ref('')
+
+const activeSessionId = ref<string | null>(null)
+const sessionCache = reactive<Record<string, AnswerTurn[]>>({})
+const activeSessionTitle = ref('')
+const loadingSession = ref(false)
+
+const activeController = ref<AbortController | null>(null)
+const scrollPane = ref<HTMLElement | null>(null)
+const composerInput = ref<HTMLTextAreaElement | null>(null)
+
+const selectedCitation = ref<CitationSource | null>(null)
+let searchTimer: number | undefined
+
+const activeTurns = computed(() => (activeSessionId.value ? sessionCache[activeSessionId.value] ?? [] : []))
+
+const kbName = computed(() => {
+  const match = knowledgeBases.value.find((item) => item.id === knowledgeBaseId.value)
+  return match ? match.name : '全部知识库'
+})
+const enabledBases = computed(() => knowledgeBases.value.filter((item) => item.enabled))
+const ollamaReady = computed(() => Boolean(status.value?.ollama.reachable && status.value?.ollama.installed))
+
+const stageLabels: Record<string, string> = {
+  understanding: '正在理解问题',
+  retrieving: '正在检索公司资料',
+  reranking: '正在重排检索结果',
+  local_generating: '千问正在根据资料生成',
+  deepseek_enhancing: 'DeepSeek 正在增强答案',
 }
 
 async function loadStatus() {
@@ -38,104 +75,491 @@ async function loadStatus() {
     status.value = await getAnswerStatus()
     harnessStatus.value = await getHarnessStatus()
     if (!selectedContext.value && harnessStatus.value.contexts.length) selectedContext.value = harnessStatus.value.contexts[0]
-    await restorePendingTask()
     statusError.value = ''
   } catch (reason) {
     statusError.value = reason instanceof ApiError ? reason.message : '无法检查本地模型状态'
   }
 }
 
-async function restorePendingTask() {
-  const taskId = localStorage.getItem('company-search-pending-harness-task')
-  if (!taskId || messages.value.some((item) => item.harnessTaskId === taskId)) return
+async function loadKnowledgeBases() {
   try {
-    const task = await getHarnessTask(taskId)
-    const pending = task.approvals.find((item) => item.status === 'PENDING') ?? null
-    if (!pending) { localStorage.removeItem('company-search-pending-harness-task'); return }
-    messages.value.push(reactive<AnswerMessage>({
-      id: crypto.randomUUID(), question: task.question, answer: '', sources: [], warnings: [], provider: 'LOCAL', scope: null,
-      stage: null, complete: false, harnessTaskId: task.id, approval: pending,
-      harnessSteps: task.steps.map((step) => ({ number: step.sequence_number, tool: step.tool_name || '模型决策', status: step.status === 'AWAITING_APPROVAL' ? 'awaiting' : step.status === 'SUCCEEDED' ? 'succeeded' : step.status === 'FAILED' ? 'failed' : 'running', reason: step.reason || undefined, result: step.result || undefined })),
-    }))
-  } catch { localStorage.removeItem('company-search-pending-harness-task') }
+    const result = await listKnowledgeBases()
+    knowledgeBases.value = result.items
+    if (!knowledgeBaseId.value) {
+      const firstEnabled = result.items.find((item) => item.enabled)
+      knowledgeBaseId.value = firstEnabled?.id ?? ''
+    }
+  } catch {
+    // 知识库不影响问答主流程
+  }
 }
 
-watch(selectedContext, async (context) => {
-  namespaces.value = []
-  if (!context) return
-  try {
-    namespaces.value = await getNamespaces(context)
-    if (!namespaces.value.includes(selectedNamespace.value)) selectedNamespace.value = namespaces.value[0] || 'default'
-  } catch (reason) {
-    statusError.value = reason instanceof Error ? reason.message : '无法读取 namespace'
-  }
-})
+function storeActiveSession(id: string | null) {
+  if (id) window.localStorage.setItem(ACTIVE_SESSION_KEY, id)
+  else window.localStorage.removeItem(ACTIVE_SESSION_KEY)
+}
 
-async function ask() {
-  const value = question.value.trim()
+async function refreshSessions() {
+  sessionsLoading.value = true
+  try {
+    const result = await listChatSessions(sessionSearch.value || undefined, showArchived.value)
+    sessions.value = result.items
+  } catch (reason) {
+    sessionError.value = reason instanceof Error ? reason.message : '无法读取历史会话'
+  } finally {
+    sessionsLoading.value = false
+  }
+}
+
+function ensureTurns(sessionId: string): AnswerTurn[] {
+  if (!sessionCache[sessionId]) sessionCache[sessionId] = []
+  return sessionCache[sessionId]
+}
+
+function dbSourceToUi(source: { citation_number: number; document_id: string; chunk_id: string; document_name: string; content_snapshot: string; location_snapshot: Record<string, unknown>; score?: number | null; available: boolean; status: string }): CitationSource {
+  const location = source.location_snapshot
+  const locationText = (typeof location.text === 'string' && location.text) || '片段内容'
+  return {
+    citation_number: source.citation_number,
+    document_id: source.document_id,
+    chunk_id: source.chunk_id,
+    document_name: source.document_name,
+    content: source.content_snapshot,
+    location_text: locationText,
+    score: source.score ?? null,
+    available: source.available,
+    status: (source.status as CitationSource['status']) || 'ACTIVE',
+    meta: source.location_snapshot,
+  }
+}
+
+function sseSourceToUi(source: AnswerSource): CitationSource {
+  const locationText = source.page_start
+    ? `第 ${source.page_start}${source.page_end && source.page_end !== source.page_start ? `–${source.page_end}` : ''} 页`
+    : source.slide_number
+      ? `第 ${source.slide_number} 张幻灯片`
+      : source.sheet_name
+        ? `${source.sheet_name}${source.row_start ? ` · 第 ${source.row_start} 行起` : ''}`
+        : `片段 ${source.sequence_number}`
+  return {
+    citation_number: source.citation_number,
+    document_id: source.document_id,
+    chunk_id: source.chunk_id,
+    document_name: source.document_name,
+    content: source.content,
+    location_text: locationText,
+    score: source.score ?? null,
+    available: true,
+    status: 'ACTIVE',
+    meta: {
+      page_start: source.page_start, page_end: source.page_end, slide_number: source.slide_number,
+      sheet_name: source.sheet_name, row_start: source.row_start, row_end: source.row_end,
+      sequence_number: source.sequence_number, section_path: source.section_path, extension: source.extension,
+      match_type: source.match_type,
+    },
+  }
+}
+
+function turnFromHistory(messages: ChatMessageRecord[]): AnswerTurn[] {
+  const turns: AnswerTurn[] = []
+  let pending: AnswerTurn | null = null
+  for (const message of messages) {
+    if (message.role === 'USER') {
+      pending = {
+        key: message.id,
+        userMessageId: message.id,
+        assistantMessageId: null,
+        question: message.content,
+        answer: '',
+        sources: [],
+        warnings: [],
+        provider: 'LOCAL',
+        scope: null,
+        generating: false,
+        stage: null,
+        failed: false,
+        stopped: false,
+        harnessTaskId: null,
+        harnessSteps: [],
+        approval: null,
+      }
+    } else if (message.role === 'ASSISTANT') {
+      const hasContent = Boolean(message.content)
+      const turn = pending ?? {
+        key: message.id,
+        userMessageId: null,
+        assistantMessageId: message.id,
+        question: '',
+        answer: '',
+        sources: [],
+        warnings: [],
+        provider: message.provider ?? 'LOCAL',
+        scope: null,
+        generating: false,
+        stage: null,
+        failed: false,
+        stopped: false,
+        harnessTaskId: null,
+        harnessSteps: [],
+        approval: null,
+      }
+      turn.assistantMessageId = message.id
+      turn.answer = message.content || ''
+      turn.provider = message.provider ?? 'LOCAL'
+      turn.scope = message.knowledge_scope as AnswerTurn['scope']
+      turn.sources = message.sources.map(dbSourceToUi)
+      if (message.status === 'FAILED') {
+        turn.failed = true
+        turn.errorMessage = message.error_message || undefined
+      } else if (message.status === 'STOPPED') {
+        turn.stopped = true
+      } else if (message.status === 'GENERATING' && !hasContent) {
+        // 刷新时仍在生成中的记录已不可恢复，按停止处理。
+        turn.stopped = true
+        pending = turn
+        continue
+      }
+      turns.push(turn)
+      pending = null
+    }
+  }
+  if (pending) {
+    pending.stopped = true
+    turns.push(pending)
+  }
+  return turns
+}
+
+async function selectSession(sessionId: string) {
+  const cached = sessionCache[sessionId]
+  if (cached) {
+    // 会话已在内存中时直接切换，避免打断正在进行的生成或丢失已生成的部分文本。
+    activeSessionId.value = sessionId
+    storeActiveSession(sessionId)
+    const item = sessions.value.find((entry) => entry.id === sessionId)
+    if (item) activeSessionTitle.value = item.title
+    return
+  }
+  await loadSession(sessionId)
+}
+
+async function loadSession(sessionId: string, refreshMeta = true) {
+  loadingSession.value = true
+  try {
+    const detail: ChatSessionDetail = await getChatSession(sessionId)
+    sessionCache[sessionId] = turnFromHistory(detail.messages)
+    activeSessionId.value = sessionId
+    activeSessionTitle.value = detail.title
+    storeActiveSession(sessionId)
+    if (refreshMeta) await refreshSessions()
+    await nextTick()
+    scrollToBottom(false)
+  } catch (reason) {
+    sessionError.value = reason instanceof ApiError ? reason.message : '无法恢复会话'
+  } finally {
+    loadingSession.value = false
+  }
+}
+
+async function newSession() {
+  if (activeController.value) return
+  try {
+    const detail = await createChatSession()
+    sessionCache[detail.id] = []
+    activeSessionId.value = detail.id
+    activeSessionTitle.value = detail.title
+    storeActiveSession(detail.id)
+    question.value = ''
+    await refreshSessions()
+  } catch (reason) {
+    sessionError.value = reason instanceof ApiError ? reason.message : '无法新建会话'
+  }
+}
+
+async function restoreInitialSession() {
+  await refreshSessions()
+  const stored = window.localStorage.getItem(ACTIVE_SESSION_KEY)
+  const list = sessions.value
+  const candidate = stored && !showArchived.value ? list.find((item) => item.id === stored) : undefined
+  const fallback = list[0]
+  const target = candidate ?? fallback
+  if (target) await loadSession(target.id, false)
+}
+
+async function renameSession(id: string, title: string) {
+  try {
+    const detail = await renameChatSession(id, title)
+    if (id === activeSessionId.value) activeSessionTitle.value = detail.title
+    await refreshSessions()
+  } catch (reason) {
+    sessionError.value = reason instanceof Error ? reason.message : '重命名失败'
+  }
+}
+
+async function archiveSession(id: string) {
+  try {
+    await archiveChatSession(id)
+    if (id === activeSessionId.value) {
+      activeSessionId.value = null
+      storeActiveSession(null)
+    }
+    await refreshSessions()
+  } catch (reason) {
+    sessionError.value = reason instanceof Error ? reason.message : '归档失败'
+  }
+}
+
+async function restoreArchivedSession(id: string) {
+  try {
+    await restoreChatSession(id)
+    await refreshSessions()
+  } catch (reason) {
+    sessionError.value = reason instanceof Error ? reason.message : '恢复失败'
+  }
+}
+
+async function purgeSession(id: string) {
+  try {
+    await deleteChatSession(id, true)
+    if (id === activeSessionId.value) {
+      activeSessionId.value = null
+      storeActiveSession(null)
+    }
+    delete sessionCache[id]
+    await refreshSessions()
+  } catch (reason) {
+    sessionError.value = reason instanceof Error ? reason.message : '删除失败'
+  }
+}
+
+function historyFor(questionIndex: number): Pick<AnswerTurn, 'question' | 'answer'>[] {
+  const turns = activeTurns.value.slice(0, questionIndex).filter((item) => item.answer)
+  return turns.slice(-6).map((item) => ({ question: item.question, answer: item.answer }))
+}
+
+async function ask(suggested?: string) {
+  const value = (suggested ?? question.value).trim()
   if (!value || activeController.value) return
-  const history = messages.value.filter((item) => item.complete && item.answer).slice(-6).map((item) => ({ question: item.question, answer: item.answer }))
-  const message = reactive<AnswerMessage>({
-    id: crypto.randomUUID(), question: value, answer: '', sources: [], warnings: [],
-    provider: 'LOCAL', scope: null, stage: useHarness.value ? null : 'retrieving', complete: false,
-    harnessTaskId: null, harnessSteps: [], approval: null,
+  let sessionId = activeSessionId.value
+  if (!sessionId) {
+    try {
+      const detail = await createChatSession()
+      sessionId = detail.id
+      sessionCache[detail.id] = []
+      activeSessionId.value = detail.id
+      activeSessionTitle.value = detail.title
+      storeActiveSession(detail.id)
+    } catch {
+      sessionError.value = '无法创建会话，请检查本地服务'
+      return
+    }
+  }
+
+  const turns = ensureTurns(sessionId)
+  const history = historyFor(turns.length)
+  const questionIndex = turns.length
+  const turn = reactive<AnswerTurn>({
+    key: `q-${sessionId}-${Date.now()}`,
+    userMessageId: null,
+    assistantMessageId: null,
+    question: value,
+    answer: '',
+    sources: [],
+    warnings: [],
+    provider: 'LOCAL',
+    scope: null,
+    generating: true,
+    stage: 'understanding',
+    failed: false,
+    stopped: false,
+    harnessTaskId: null,
+    harnessSteps: [],
+    approval: null,
   })
-  messages.value.push(message)
+  turns.push(turn)
+  activeSessionId.value = sessionId
+  storeActiveSession(sessionId)
   question.value = ''
+  window.localStorage.removeItem(DRAFT_KEY)
   const controller = new AbortController()
   activeController.value = controller
-  await scrollToEnd()
+  await scrollToBottom(true)
   try {
-    await streamAnswer({ question: value, useDeepseek: useDeepseek.value, useHarness: useHarness.value, k8sContext: selectedContext.value, k8sNamespace: selectedNamespace.value, deploymentYaml: deploymentYaml.value, history }, controller.signal, (event) => {
-      handleHarnessEvent(message, event)
-      if (event.type === 'stage') message.stage = event.stage ?? null
-      if (event.type === 'sources') message.sources = event.sources ?? []
-      if (event.type === 'replace') { message.answer = ''; message.provider = event.provider ?? 'DEEPSEEK' }
-      if (event.type === 'delta') { message.answer += event.text ?? ''; message.provider = event.provider ?? message.provider }
-      if (event.type === 'warning' && event.warning) message.warnings.push(event.warning)
-      if (event.type === 'done') { message.scope = event.scope ?? null; message.provider = event.provider ?? message.provider; message.stage = null; message.complete = true }
-      if (event.type === 'error' && event.error) { message.warnings.push(event.error); message.stage = null; message.complete = true }
-      void scrollToEnd()
+    const outcome = await streamAnswer({
+      question: value,
+      sessionId,
+      knowledgeBaseId: knowledgeBaseId.value || undefined,
+      useDeepseek: useDeepseek.value,
+      useHarness: useHarness.value,
+      k8sContext: selectedContext.value,
+      k8sNamespace: selectedNamespace.value,
+      deploymentYaml: deploymentYaml.value,
+      history,
+    }, controller.signal, (event) => {
+      handleAnswerEvent(turn, event)
+      void scrollToBottom(false)
     })
-    if (!message.complete && !message.approval) { message.complete = true; message.stage = null }
+    if (outcome.sessionId) {
+      activeSessionId.value = outcome.sessionId
+      storeActiveSession(outcome.sessionId)
+    }
+    if (outcome.messageId) turn.assistantMessageId = outcome.messageId
+    finalizeTurn(turn, false)
   } catch (reason) {
     if (!controller.signal.aborted) {
-      message.warnings.push({ code: 'CONNECTION_FAILED', message: reason instanceof Error ? reason.message : '问答连接中断' })
+      turn.warnings.push({ code: 'CONNECTION_FAILED', message: reason instanceof Error ? reason.message : '问答连接中断' })
+      turn.errorMessage = reason instanceof Error ? reason.message : '问答连接中断'
+      finalizeTurn(turn, true)
+    } else {
+      turn.stopped = true
+      finalizeTurn(turn, false)
     }
-    message.complete = true
-    message.stage = null
   } finally {
     activeController.value = null
   }
 }
 
-function handleHarnessEvent(message: AnswerMessage, event: import('../../types/answer').AnswerEvent) {
-  if (event.task_id) message.harnessTaskId = event.task_id
-  if (event.type === 'tool_requested' && event.tool && event.step) message.harnessSteps.push({ number: event.step, tool: event.tool, status: 'requested', reason: String(event.tool_result?.reason || '') })
-  if (event.type === 'tool_running') { const step = message.harnessSteps.find((item) => item.number === event.step); if (step) step.status = 'running' }
-  if (event.type === 'tool_result') { const step = message.harnessSteps.find((item) => item.number === event.step); if (step) { step.status = event.tool_result?.success === false ? 'failed' : 'succeeded'; step.result = event.tool_result ?? undefined } }
-  if (event.type === 'approval_required' && event.approval) { message.approval = event.approval; message.stage = null; message.complete = false; localStorage.setItem('company-search-pending-harness-task', message.harnessTaskId || ''); const step = message.harnessSteps.find((item) => item.number === event.step); if (step) step.status = 'awaiting' }
-  if (event.type === 'harness_done') { message.complete = true; message.stage = null; localStorage.removeItem('company-search-pending-harness-task') }
+function finalizeTurn(turn: AnswerTurn, failed: boolean) {
+  if (turn.generating) {
+    turn.generating = false
+    turn.stage = null
+    if (failed) turn.failed = true
+    if (!turn.answer && !failed) turn.stopped = true
+    void refreshSessions()
+  }
 }
 
-async function decideApproval(message: AnswerMessage, confirmation: string | null) {
-  if (!message.approval || !message.harnessTaskId) return
+async function regenerate(turn: AnswerTurn) {
+  if (activeController.value || !activeSessionId.value) return
+  const turns = activeTurns.value
+  const index = turns.findIndex((item) => item.key === turn.key)
+  const questionIndex = index >= 0 ? index : turns.length
+  const history = turns.slice(0, questionIndex).filter((item) => item.answer).slice(-6).map((item) => ({ question: item.question, answer: item.answer }))
+  const assistantMessageId = turn.assistantMessageId
+  if (!assistantMessageId) return
+  turn.answer = ''
+  turn.sources = []
+  turn.warnings = []
+  turn.provider = 'LOCAL'
+  turn.scope = null
+  turn.generating = true
+  turn.stage = 'understanding'
+  turn.failed = false
+  turn.stopped = false
+  turn.errorMessage = undefined
+  const controller = new AbortController()
+  activeController.value = controller
+  await scrollToBottom(true)
+  try {
+    const outcome = await streamAnswer({
+      question: turn.question,
+      sessionId: activeSessionId.value,
+      regenerateMessageId: assistantMessageId,
+      knowledgeBaseId: knowledgeBaseId.value || undefined,
+      useDeepseek: useDeepseek.value,
+      useHarness: useHarness.value,
+      k8sContext: selectedContext.value,
+      k8sNamespace: selectedNamespace.value,
+      deploymentYaml: deploymentYaml.value,
+      history,
+    }, controller.signal, (event) => {
+      handleAnswerEvent(turn, event)
+      void scrollToBottom(false)
+    })
+    if (outcome.messageId) turn.assistantMessageId = outcome.messageId
+    finalizeTurn(turn, false)
+  } catch (reason) {
+    if (!controller.signal.aborted) {
+      turn.warnings.push({ code: 'CONNECTION_FAILED', message: reason instanceof Error ? reason.message : '问答连接中断' })
+      turn.errorMessage = reason instanceof Error ? reason.message : '问答连接中断'
+      finalizeTurn(turn, true)
+    } else {
+      turn.stopped = true
+      finalizeTurn(turn, false)
+    }
+  } finally {
+    activeController.value = null
+  }
+}
+
+function handleAnswerEvent(turn: AnswerTurn, event: AnswerEvent) {
+  handleHarnessEvent(turn, event)
+  if (event.type === 'stage') turn.stage = event.stage ?? null
+  if (event.type === 'sources') turn.sources = (event.sources ?? []).map(sseSourceToUi)
+  if (event.type === 'replace') { turn.answer = ''; turn.provider = event.provider ?? 'DEEPSEEK' }
+  if (event.type === 'delta') { turn.answer += event.text ?? ''; if (event.provider) turn.provider = event.provider }
+  if (event.type === 'warning' && event.warning) turn.warnings.push(event.warning)
+  if (event.type === 'done') {
+    turn.scope = event.scope ?? null
+    if (event.provider) turn.provider = event.provider
+  }
+  if (event.type === 'error' && event.error) {
+    turn.warnings.push(event.error)
+    turn.errorMessage = event.error.message
+  }
+}
+
+function handleHarnessEvent(turn: AnswerTurn, event: AnswerEvent) {
+  if (event.task_id) turn.harnessTaskId = event.task_id
+  if (event.type === 'tool_requested' && event.tool && event.step) {
+    turn.harnessSteps.push({ number: event.step, tool: event.tool, status: 'requested', reason: String(event.tool_result?.reason || '') })
+  }
+  if (event.type === 'tool_running') {
+    const step = turn.harnessSteps.find((item) => item.number === event.step)
+    if (step) step.status = 'running'
+  }
+  if (event.type === 'tool_result') {
+    const step = turn.harnessSteps.find((item) => item.number === event.step)
+    if (step) {
+      step.status = event.tool_result?.success === false ? 'failed' : 'succeeded'
+      step.result = event.tool_result ?? undefined
+    }
+  }
+  if (event.type === 'approval_required' && event.approval) {
+    turn.approval = event.approval
+    turn.stage = null
+    turn.generating = false
+    window.localStorage.setItem('company-search-pending-harness-task', turn.harnessTaskId || '')
+    const step = turn.harnessSteps.find((item) => item.number === event.step)
+    if (step) step.status = 'awaiting'
+  }
+  if (event.type === 'harness_done') {
+    turn.scope = 'INTERNAL'
+    turn.provider = 'HARNESS'
+    window.localStorage.removeItem('company-search-pending-harness-task')
+  }
+}
+
+async function decideApproval(turn: AnswerTurn, confirmation: string | null) {
+  if (!turn.approval || !turn.harnessTaskId) return
   approvalBusy.value = true
   try {
-    if (confirmation === null) await rejectApproval(message.approval.id)
-    else await confirmApproval(message.approval.id, confirmation)
-    message.approval = null
-    localStorage.removeItem('company-search-pending-harness-task')
-    await resumeHarness(message.harnessTaskId, useDeepseek.value, (event) => {
-      handleHarnessEvent(message, event)
-      if (event.type === 'delta') { message.answer += event.text ?? ''; message.provider = event.provider ?? message.provider }
-      if (event.type === 'replace') { message.answer = ''; message.provider = event.provider ?? 'DEEPSEEK' }
-      if (event.type === 'warning' && event.warning) message.warnings.push(event.warning)
-      if (event.type === 'error' && event.error) message.warnings.push(event.error)
+    if (confirmation === null) await rejectApproval(turn.approval.id)
+    else await confirmApproval(turn.approval.id, confirmation)
+    turn.approval = null
+    window.localStorage.removeItem('company-search-pending-harness-task')
+    turn.generating = true
+    await resumeHarness(turn.harnessTaskId, useDeepseek.value, (event) => {
+      handleHarnessEvent(turn, event)
+      if (event.type === 'delta') { turn.answer += event.text ?? ''; if (event.provider) turn.provider = event.provider }
+      if (event.type === 'replace') { turn.answer = ''; turn.provider = event.provider ?? 'DEEPSEEK' }
+      if (event.type === 'warning' && event.warning) turn.warnings.push(event.warning)
+      if (event.type === 'error' && event.error) { turn.warnings.push(event.error); turn.errorMessage = event.error.message }
+      if (event.type === 'harness_done') {
+        turn.generating = false
+        turn.stage = null
+        turn.scope = 'INTERNAL'
+        turn.provider = 'HARNESS'
+        void refreshSessions()
+      }
     })
+    finalizeTurn(turn, false)
   } catch (reason) {
-    message.warnings.push({ code: 'APPROVAL_FAILED', message: reason instanceof Error ? reason.message : '审批处理失败' })
-  } finally { approvalBusy.value = false }
+    turn.warnings.push({ code: 'APPROVAL_FAILED', message: reason instanceof Error ? reason.message : '审批处理失败' })
+    finalizeTurn(turn, true)
+  } finally {
+    approvalBusy.value = false
+  }
 }
 
 function stop() {
@@ -149,114 +573,302 @@ function handleKeydown(event: KeyboardEvent) {
 }
 
 function clearConversation() {
+  if (!window.confirm('清空当前会话界面？历史记录仍会保存在左侧，不会删除。')) return
   stop()
-  messages.value = []
+  if (activeSessionId.value) {
+    sessionCache[activeSessionId.value] = []
+  }
 }
 
-async function scrollToEnd() {
+function sourceLocation(source: CitationSource): string {
+  return source.location_text
+}
+
+function providerLabel(turn: AnswerTurn): string {
+  if (turn.scope === 'GENERAL') return 'DeepSeek 通用知识'
+  if (turn.provider === 'DEEPSEEK') return 'DeepSeek 增强'
+  if (turn.provider === 'HARNESS') return 'Harness 执行'
+  return '千问本地回答'
+}
+
+function openCitation(turn: AnswerTurn, number: number) {
+  const source = turn.sources.find((item) => item.citation_number === number)
+  if (source) {
+    selectedCitation.value = source
+  } else if (number >= 1 && number <= turn.sources.length) {
+    selectedCitation.value = turn.sources[number - 1]
+  }
+}
+
+function openInLibrary(documentId: string) {
+  selectedCitation.value = null
+  window.dispatchEvent(new CustomEvent('company-open-document', { detail: documentId }))
+  window.dispatchEvent(new CustomEvent('company-switch-page', { detail: 'library' }))
+}
+
+function copyAnswer(turn: AnswerTurn) {
+  if (!navigator.clipboard || !turn.answer) return
+  void navigator.clipboard.writeText(turn.answer)
+}
+
+async function scrollToBottom(smooth: boolean) {
   await nextTick()
-  // 输入区采用 fixed 定位；滚到文档底部才能利用动态留白，让最新回答停在输入区上方。
-  window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' })
+  const pane = scrollPane.value
+  if (!pane) return
+  const nearBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 160
+  if (smooth || nearBottom) {
+    pane.scrollTo({ top: pane.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
+  }
 }
 
-function sourceLocation(source: AnswerSource): string {
-  if (source.page_start) return `第 ${source.page_start}${source.page_end && source.page_end !== source.page_start ? `–${source.page_end}` : ''} 页`
-  if (source.slide_number) return `第 ${source.slide_number} 张幻灯片`
-  if (source.sheet_name) return `${source.sheet_name}${source.row_start ? ` · 第 ${source.row_start}${source.row_end && source.row_end !== source.row_start ? `–${source.row_end}` : ''} 行` : ''}`
-  return `片段 ${source.sequence_number}`
+function autoResize() {
+  const el = composerInput.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${Math.min(el.scrollHeight, 180)}px`
 }
 
-function providerLabel(message: AnswerMessage): string {
-  if (message.scope === 'GENERAL') return 'DeepSeek 通用知识'
-  return message.provider === 'DEEPSEEK' ? 'DeepSeek 增强' : '千问本地回答'
+function onAdvancedToggle(event: Event) {
+  advancedOpen.value = (event.target as HTMLDetailsElement).open
+}
+
+function saveDraft() {
+  window.localStorage.setItem(DRAFT_KEY, question.value)
+}
+
+watch([sessionSearch, showArchived], () => {
+  window.clearTimeout(searchTimer)
+  searchTimer = window.setTimeout(refreshSessions, 250)
+})
+
+watch(selectedContext, async (context) => {
+  namespaces.value = []
+  if (!context) return
+  try {
+    namespaces.value = await getNamespaces(context)
+    if (!namespaces.value.includes(selectedNamespace.value)) selectedNamespace.value = namespaces.value[0] || 'default'
+  } catch {
+    // 读取失败不阻断提问
+  }
+})
+
+async function restorePendingApproval() {
+  const taskId = window.localStorage.getItem('company-search-pending-harness-task')
+  if (!taskId || !activeSessionId.value) return
+  try {
+    const task = await getHarnessTask(taskId)
+    const pending = task.approvals.find((item) => item.status === 'PENDING') ?? null
+    if (!pending) {
+      window.localStorage.removeItem('company-search-pending-harness-task')
+      return
+    }
+    const turns = activeTurns.value
+    const turn = turns.find((item) => item.harnessTaskId === taskId)
+    if (turn && !turn.approval) {
+      turn.approval = pending as HarnessApproval
+      turn.stage = null
+      turn.generating = false
+    }
+  } catch {
+    window.localStorage.removeItem('company-search-pending-harness-task')
+  }
 }
 
 onMounted(() => {
+  const draft = window.localStorage.getItem(DRAFT_KEY)
+  if (draft) question.value = draft
   void loadStatus()
-  void nextTick(() => {
-    if (!composer.value) return
-    composerObserver = new ResizeObserver(([entry]) => {
-      composerHeight.value = Math.ceil(entry.contentRect.height)
-    })
-    composerObserver.observe(composer.value)
-  })
+  void loadKnowledgeBases()
+  void restoreInitialSession().then(() => restorePendingApproval())
 })
+
 onBeforeUnmount(() => {
   stop()
-  composerObserver?.disconnect()
+  window.clearTimeout(searchTimer)
+  saveDraft()
 })
 </script>
 
 <template>
-  <main class="app-shell answer-shell" :style="shellStyle">
-    <header class="hero answer-hero">
-      <p class="eyebrow">KNOWLEDGE ASSISTANT · LOCAL FIRST</p>
-      <h1>公司知识问答</h1>
-      <p>先检索内部资料，再由本机千问生成带出处的答案；只有你主动打开开关时才尝试使用 DeepSeek。</p>
-    </header>
+  <div class="qa-layout">
+    <SessionSidebar
+      :items="sessions"
+      :active-id="activeSessionId"
+      :show-archived="showArchived"
+      :loading="sessionsLoading"
+      @select="selectSession($event)"
+      @create="newSession"
+      @rename="renameSession"
+      @archive="archiveSession"
+      @restore="restoreArchivedSession"
+      @purge="purgeSession"
+      @search="sessionSearch = $event"
+      @toggle-archived="showArchived = $event"
+    />
 
-    <section class="answer-status" aria-label="模型状态">
-      <span :class="status?.ollama.reachable && status?.ollama.installed ? 'is-ready' : 'is-offline'">
-        {{ status?.ollama.reachable && status?.ollama.installed ? `${status.ollama.model} 已就绪` : '本地模型未就绪' }}
-      </span>
-      <span>DeepSeek {{ status?.deepseek_configured ? '已配置' : '未配置' }}</span>
-      <button type="button" @click="loadStatus">重新检查</button>
-      <button v-if="messages.length" type="button" @click="clearConversation">清空会话</button>
-    </section>
-    <p v-if="statusError" class="error">{{ statusError }}</p>
-    <p v-if="status && (!status.ollama.reachable || !status.ollama.installed)" class="answer-notice is-warning">
-      请先启动 Ollama 并确认已下载：<code>ollama pull {{ status.ollama.model }}</code>
-    </p>
-
-    <section class="conversation" aria-live="polite">
-      <div v-if="!messages.length" class="answer-welcome">
-        <strong>可以从一个具体问题开始</strong>
-        <p>例如：“公司目前采用什么气泡检测方案？”或“Go 服务如何部署到 K8s？”</p>
-      </div>
-      <article v-for="message in messages" :key="message.id" class="answer-turn">
-        <div class="user-message"><span>你</span><p>{{ message.question }}</p></div>
-        <div class="assistant-message">
-          <header><span>{{ providerLabel(message) }}</span><span v-if="message.scope === 'INTERNAL_LIMITED'" class="scope-warning">内部资料依据有限</span><span v-if="message.scope === 'GENERAL'" class="scope-warning">不来自公司资料库</span></header>
-          <p v-if="message.answer" class="answer-text">{{ message.answer }}</p>
-          <p v-if="message.stage" class="answer-stage"><span></span>{{ stageLabels[message.stage] }}</p>
-          <p v-for="warning in message.warnings" :key="warning.code" class="answer-notice is-warning">{{ warning.message }}</p>
-          <HarnessTimeline :steps="message.harnessSteps" />
-          <HarnessApproval v-if="message.approval" :approval="message.approval" :busy="approvalBusy" @confirm="decideApproval(message, $event)" @reject="decideApproval(message, null)" />
-          <details v-if="message.sources.length" class="answer-sources">
-            <summary>查看 {{ message.sources.length }} 条引用资料</summary>
-            <ol>
-              <li v-for="source in message.sources" :key="source.chunk_id">
-                <details><summary><b>[{{ source.citation_number }}] {{ source.document_name }}</b><span>{{ sourceLocation(source) }}</span></summary><pre>{{ source.content }}</pre></details>
-              </li>
-            </ol>
-          </details>
+    <main class="qa-main">
+      <header class="qa-topbar">
+        <div class="qa-assistant">
+          <span class="qa-avatar">康</span>
+          <div>
+            <strong>康师傅公司助手</strong>
+            <span>公司综合知识助手</span>
+          </div>
         </div>
-      </article>
-      <div ref="conversationEnd"></div>
-    </section>
+        <div class="qa-topmeta">
+          <span class="qa-chip" title="当前检索范围">{{ kbName }}</span>
+          <span class="qa-chip" :class="ollamaReady ? 'is-ready' : 'is-offline'">
+            {{ ollamaReady ? '千问已就绪' : '本地模型未就绪' }}
+          </span>
+          <span class="qa-chip" :class="status?.deepseek_configured ? 'is-ready' : ''">DeepSeek {{ status?.deepseek_configured ? '可用' : '关闭' }}</span>
+          <button type="button" class="qa-topbutton" @click="loadStatus">重新检查</button>
+        </div>
+      </header>
 
-    <section ref="composer" class="answer-composer">
-      <div class="answer-switches">
-        <label class="deepseek-toggle"><input v-model="useHarness" type="checkbox"><span></span><b>使用 Harness</b></label>
-        <label class="deepseek-toggle"><input v-model="useDeepseek" type="checkbox"><span></span><b>使用 DeepSeek 增强</b></label>
-      </div>
-      <div v-if="useHarness" class="harness-environment">
-        <label>Context<select v-model="selectedContext"><option value="" disabled>选择 Kubernetes context</option><option v-for="item in harnessStatus?.contexts || []" :key="item" :value="item">{{ item }}</option></select></label>
-        <label>Namespace<select v-model="selectedNamespace"><option v-for="item in namespaces" :key="item" :value="item">{{ item }}</option></select></label>
-        <small v-if="!harnessStatus?.kubectl_available">未找到 kubectl，Harness 无法运行。</small>
-        <small v-else-if="!harnessStatus?.enabled">请先在 backend/.env 配置允许的 context。</small>
-      </div>
-      <details v-if="useHarness" class="harness-yaml-input"><summary>提交部署 YAML（可选）</summary><textarea v-model="deploymentYaml" rows="5" maxlength="1048576" placeholder="粘贴 Deployment、Service、ConfigMap 等白名单资源 YAML；执行前会进行服务端 dry-run 和差异预览。"></textarea></details>
-      <p v-if="useDeepseek" class="privacy-hint">
-        开启后，本次问题、检索到的内部资料片段和本地初稿将发送给 DeepSeek。
-        <strong v-if="status && !status.deepseek_configured">尚未配置 API Key，本次仍将使用千问本地回答。</strong>
+      <p v-if="statusError" class="error">{{ statusError }}</p>
+      <p v-if="status && !ollamaReady" class="answer-notice is-warning">
+        请先启动 Ollama 并确认已下载模型：<code>ollama pull {{ status.ollama.model }}</code>，然后点击「重新检查」。
       </p>
-      <form @submit.prevent="ask">
-        <textarea v-model="question" rows="3" maxlength="1000" placeholder="输入关于公司资料的问题…" @keydown="handleKeydown"></textarea>
-        <button v-if="activeController" type="button" class="stop-answer" @click="stop">停止</button>
-        <button v-else type="submit" :disabled="!question.trim() || (useHarness && (!selectedContext || !harnessStatus?.kubectl_available))">发送</button>
-      </form>
-      <small>Enter 发送 · Shift + Enter 换行 · 当前对话不会永久保存</small>
-    </section>
-  </main>
+
+      <div ref="scrollPane" class="qa-scroll">
+        <div v-if="!activeTurns.length && !loadingSession" class="qa-welcome">
+          <div class="welcome-avatar">康</div>
+          <h2>你好，我是康师傅公司助手</h2>
+          <p>我可以基于公司内部资料回答技术、制度、产品和运营问题。资料和回答都保存在本机。</p>
+          <div class="welcome-suggestions">
+            <button v-for="item in [
+              '公司目前采用什么气泡检测方案？',
+              'Go 服务如何部署到 Kubernetes？',
+              '最新的休假和考勤制度是什么？',
+              '报销流程需要提交哪些材料？',
+              '质检报告主要包含哪些指标？',
+              '如何申请内网服务器权限？',
+            ]" :key="item" type="button" class="suggestion-chip" @click="ask(item)">{{ item }}</button>
+          </div>
+          <div v-if="knowledgeBases.length" class="welcome-kbs">
+            <strong>常用知识库</strong>
+            <div>
+              <button
+                v-for="item in enabledBases"
+                :key="item.id"
+                type="button"
+                :class="{ active: item.id === knowledgeBaseId }"
+                @click="knowledgeBaseId = item.id"
+              >{{ item.name }}</button>
+            </div>
+          </div>
+        </div>
+
+        <div v-for="turn in activeTurns" :key="turn.key" class="qa-turn">
+          <div class="user-bubble">
+            <span class="user-avatar">我</span>
+            <div>
+              <p>{{ turn.question }}</p>
+              <small v-if="turn.userMessageId">刚刚</small>
+            </div>
+          </div>
+
+          <article class="answer-card" :class="{ generating: turn.generating, failed: turn.failed }">
+            <header class="answer-card-head">
+              <div class="assistant-identity">
+                <span class="assistant-avatar">康</span>
+                <div>
+                  <strong>{{ providerLabel(turn) }}</strong>
+                  <span class="scope-badge" v-if="turn.scope === 'INTERNAL_LIMITED'">内部资料依据有限</span>
+                  <span class="scope-badge warn" v-else-if="turn.scope === 'GENERAL'">不来自公司资料库</span>
+                  <span class="status-badge" v-if="turn.stopped">已停止</span>
+                  <span class="status-badge fail" v-else-if="turn.failed">生成失败</span>
+                </div>
+              </div>
+              <div class="answer-actions" v-if="turn.answer || !turn.generating">
+                <button v-if="turn.answer" type="button" title="复制回答" @click="copyAnswer(turn)">复制</button>
+                <button v-if="turn.answer && !turn.generating" type="button" title="重新生成" @click="regenerate(turn)">重新生成</button>
+              </div>
+            </header>
+
+            <div v-if="turn.generating" class="answer-stage">
+              <span></span>{{ stageLabels[turn.stage ?? 'understanding'] ?? '正在生成' }}
+            </div>
+            <div v-if="turn.stage === 'local_generating' && !turn.answer" class="typing-dots"><i></i><i></i><i></i></div>
+
+            <div v-if="turn.answer" class="answer-card-body">
+              <MarkdownView :source="turn.answer" @citation="openCitation(turn, $event)" />
+            </div>
+
+            <p v-if="turn.errorMessage && !turn.answer" class="answer-notice is-warning">{{ turn.errorMessage }}</p>
+            <p v-for="warning in turn.warnings" :key="warning.code" class="answer-notice is-warning">{{ warning.message }}</p>
+
+            <div v-if="turn.stopped && turn.answer" class="stopped-note">回答已被停止，以下是已生成的部分。</div>
+
+            <HarnessTimeline :steps="turn.harnessSteps" />
+            <HarnessApproval v-if="turn.approval" :approval="turn.approval" :busy="approvalBusy" @confirm="decideApproval(turn, $event)" @reject="decideApproval(turn, null)" />
+
+            <footer v-if="turn.answer || turn.sources.length" class="answer-card-foot">
+              <span v-if="turn.sources.length" class="source-toggle" @click="turn.sourcesVisible = !turn.sourcesVisible">
+                {{ turn.sourcesVisible ? '收起引用' : `查看 ${turn.sources.length} 条引用` }}
+              </span>
+            </footer>
+          </article>
+
+          <section v-if="turn.sourcesVisible" class="citation-strip">
+            <button
+              v-for="source in turn.sources"
+              :key="`${source.chunk_id}-${source.citation_number}`"
+              type="button"
+              class="citation-chip"
+              @click="selectedCitation = source"
+            >
+              <b>[{{ source.citation_number }}]</b>
+              <span>{{ source.document_name }}</span>
+              <em>{{ source.location_text }}</em>
+              <i v-if="source.status !== 'ACTIVE'" :title="source.status === 'DELETED' ? '已删除' : '已停用'">停用</i>
+            </button>
+          </section>
+        </div>
+
+        <div ref="conversationEnd"></div>
+      </div>
+
+      <section class="qa-composer">
+        <details :open="advancedOpen" class="qa-advanced" @toggle="onAdvancedToggle">
+          <summary>高级设置</summary>
+          <div class="qa-advanced-body">
+            <label class="qa-field"><span>知识库范围</span><select v-model="knowledgeBaseId"><option value="">全部知识库</option><option v-for="item in enabledBases" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
+            <label class="deepseek-toggle"><input v-model="useDeepseek" type="checkbox"><span></span><b>使用 DeepSeek 增强</b></label>
+            <label class="deepseek-toggle"><input v-model="useHarness" type="checkbox"><span></span><b>使用 Harness</b></label>
+          </div>
+          <div v-if="showHarnessAdvanced" class="harness-environment">
+            <label>Context<select v-model="selectedContext"><option value="" disabled>选择 Kubernetes context</option><option v-for="item in harnessStatus?.contexts || []" :key="item" :value="item">{{ item }}</option></select></label>
+            <label>Namespace<select v-model="selectedNamespace"><option v-for="item in namespaces" :key="item" :value="item">{{ item }}</option></select></label>
+            <small v-if="useHarness && !harnessStatus?.kubectl_available">未找到 kubectl，Harness 无法运行。</small>
+            <small v-else-if="useHarness && !harnessStatus?.enabled">请先在 backend/.env 配置允许的 context。</small>
+          </div>
+          <details v-if="useHarness" class="harness-yaml-input"><summary>提交部署 YAML（可选）</summary><textarea v-model="deploymentYaml" rows="5" maxlength="1048576" placeholder="粘贴 Deployment、Service、ConfigMap 等白名单资源 YAML；执行前会进行服务端 dry-run 和差异预览。"></textarea></details>
+          <p v-if="useDeepseek" class="privacy-hint">
+            开启后，本次问题、检索到的内部资料片段和本地初稿将发送给 DeepSeek。
+            <strong v-if="status && !status.deepseek_configured">尚未配置 API Key，本次仍将使用千问本地回答。</strong>
+          </p>
+        </details>
+
+        <form class="composer-form" @submit.prevent="ask()">
+          <textarea
+            ref="composerInput"
+            v-model="question"
+            rows="1"
+            maxlength="1000"
+            placeholder="输入关于公司资料的问题，Enter 发送…"
+            @keydown="handleKeydown"
+            @input="autoResize; saveDraft()"
+          ></textarea>
+          <div class="composer-actions">
+            <button v-if="activeController" type="button" class="stop-answer" @click="stop">停止生成</button>
+            <button v-else type="submit" class="send-answer" :disabled="!question.trim() || (useHarness && (!selectedContext || !harnessStatus?.kubectl_available))">发送</button>
+          </div>
+        </form>
+        <small class="composer-hint">Enter 发送 · Shift + Enter 换行 · 切换页面后当前输入与生成状态都会保留</small>
+      </section>
+    </main>
+
+    <ReferenceDrawer :source="selectedCitation" @close="selectedCitation = null" @open-document="openInLibrary" />
+  </div>
 </template>

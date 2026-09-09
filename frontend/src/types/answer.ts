@@ -1,6 +1,6 @@
 export type AnswerProvider = 'LOCAL' | 'DEEPSEEK'
 export type KnowledgeScope = 'INTERNAL' | 'INTERNAL_LIMITED' | 'GENERAL' | 'NONE'
-export type AnswerStage = 'retrieving' | 'local_generating' | 'deepseek_enhancing'
+export type AnswerStage = string
 
 export interface AnswerSource {
   citation_number: number
@@ -19,6 +19,7 @@ export interface AnswerSource {
   section_path: string[]
   ocr_confidence: number | null
   match_type: string
+  score?: number | null
 }
 
 export interface AnswerWarning { code: string; message: string }
@@ -73,4 +74,38 @@ export interface AnswerMessage {
   harnessTaskId: string | null
   harnessSteps: HarnessStep[]
   approval: HarnessApproval | null
+}
+
+export interface CitationSource {
+  citation_number: number
+  document_id: string
+  chunk_id: string
+  document_name: string
+  content: string
+  location_text: string
+  score?: number | null
+  available: boolean
+  status: 'ACTIVE' | 'DISABLED' | 'DELETED'
+  meta?: Record<string, unknown>
+}
+
+export interface AnswerTurn {
+  key: string
+  userMessageId: string | null
+  assistantMessageId: string | null
+  question: string
+  answer: string
+  sources: CitationSource[]
+  warnings: AnswerWarning[]
+  provider: string
+  scope: KnowledgeScope | null
+  generating: boolean
+  stage: string | null
+  failed: boolean
+  stopped: boolean
+  errorMessage?: string
+  harnessTaskId: string | null
+  harnessSteps: HarnessStep[]
+  approval: HarnessApproval | null
+  sourcesVisible?: boolean
 }

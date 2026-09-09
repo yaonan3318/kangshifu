@@ -42,6 +42,10 @@ export async function deleteDocument(id: string): Promise<void> {
   await parseResponse<void>(await fetch(`/api/documents/${id}`, { method: 'DELETE' }))
 }
 
+export async function getDocument(id: string): Promise<DocumentRecord> {
+  return parseResponse(await fetch(`/api/documents/${id}`))
+}
+
 export async function restoreDocument(id: string): Promise<DocumentRecord> { return parseResponse(await fetch(`/api/documents/${id}/restore`, {method:'POST'})) }
 export async function purgeDocument(id: string): Promise<void> { await parseResponse<void>(await fetch(`/api/documents/${id}/purge`, {method:'DELETE'})) }
 export async function setDocumentEnabled(id: string, enabled: boolean): Promise<DocumentRecord> { return parseResponse(await fetch(`/api/documents/${id}/${enabled?'enable':'disable'}`, {method:'POST'})) }

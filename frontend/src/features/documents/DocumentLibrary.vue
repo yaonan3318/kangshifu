@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ApiError, deleteDocument, listDocuments, setDocumentEnabled } from '../../api/documents'
+import { ApiError, deleteDocument, getDocument, listDocuments, setDocumentEnabled } from '../../api/documents'
 import type { DocumentRecord } from '../../types/documents'
 import DocumentTable from './DocumentTable.vue'
 import DocumentDetail from './DocumentDetail.vue'
@@ -81,15 +81,32 @@ async function remove(document: DocumentRecord) {
 }
 async function toggle(document:DocumentRecord){try{await setDocumentEnabled(document.id,!document.enabled);await refresh()}catch(reason){error.value=reason instanceof ApiError?reason.message:'操作失败'}}
 
+function onOpenDocument(event: Event) {
+  const id = (event as CustomEvent<string>).detail
+  if (!id) return
+  void (async () => {
+    try {
+      selectedDocument.value = await getDocument(id)
+      libraryMode.value = 'single'
+    } catch (reason) {
+      error.value = reason instanceof ApiError ? reason.message : '无法打开文档'
+    }
+  })()
+}
+
 onMounted(() => {
   refresh()
   refreshBatches()
   refreshKnowledgeBases()
+  window.addEventListener('company-open-document', onOpenDocument)
   pollTimer = window.setInterval(() => {
     if (documents.value.some((item) => ['PENDING', 'PARSING', 'CHUNKING', 'PARSED', 'EMBEDDING', 'INDEXING'].includes(item.status))) refresh(true)
   }, 2000)
 })
-onUnmounted(() => window.clearInterval(pollTimer))
+onUnmounted(() => {
+  window.clearInterval(pollTimer)
+  window.removeEventListener('company-open-document', onOpenDocument)
+})
 </script>
 
 <template>

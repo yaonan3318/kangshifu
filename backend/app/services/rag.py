@@ -95,7 +95,8 @@ class RagService:
         return SearchRequest(
             query=request.question.strip(), extension=request.extension,
             document_name=request.document_name, created_from=request.created_from,
-            created_to=request.created_to, limit=self.settings.rag_source_limit,
+            created_to=request.created_to, knowledge_base_id=request.knowledge_base_id,
+            limit=self.settings.rag_source_limit,
         )
 
     def _sources(self, results: list[SearchResult]) -> list[AnswerSource]:
@@ -122,7 +123,7 @@ class RagService:
                 slide_number=result.slide_number, sheet_name=result.sheet_name,
                 row_start=result.row_start, row_end=result.row_end,
                 section_path=result.section_path, ocr_confidence=result.ocr_confidence,
-                match_type=result.match_type,
+                match_type=result.match_type, score=result.final_score,
             ))
         return sources
 

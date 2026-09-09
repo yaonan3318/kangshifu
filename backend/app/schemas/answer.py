@@ -16,6 +16,9 @@ class ConversationTurn(BaseModel):
 
 class AnswerRequest(BaseModel):
     question: str = Field(min_length=1, max_length=1000)
+    session_id: uuid.UUID | None = None
+    regenerate_message_id: uuid.UUID | None = None
+    knowledge_base_id: uuid.UUID | None = None
     use_deepseek: bool = False
     use_harness: bool = False
     k8s_context: str | None = Field(default=None, max_length=255)
@@ -57,6 +60,7 @@ class AnswerSource(BaseModel):
     section_path: list[str]
     ocr_confidence: float | None
     match_type: str
+    score: float | None = None
 
 
 class AnswerWarning(BaseModel):
