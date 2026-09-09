@@ -20,5 +20,5 @@ def search_documents(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> SearchResponse:
     """按关键词与语义向量同时检索已完成索引的文档片段。"""
-    items = SearchService(session, settings).search(request)
-    return SearchResponse(query=request.query.strip(), items=items, total=len(items))
+    outcome = SearchService(session, settings).search_with_diagnostics(request)
+    return SearchResponse(query=request.query.strip(), items=outcome.items, total=len(outcome.items), diagnostics=outcome.diagnostics)

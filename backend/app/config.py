@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     search_candidate_limit: int = 30
     search_rrf_k: int = 60
     search_vector_min_similarity: float = 0.55
+    search_min_evidence_score: float = 0.35
+    search_per_document_limit: int = 3
+    search_synonyms: str = "k8s|kubernetes|容器编排;气泡项目|气泡检测|bubble;日报|工作记录|周报"
+    rerank_enabled: bool = False
+    rerank_model: str = "BAAI/bge-reranker-v2-m3"
+    rerank_candidate_limit: int = 20
+    rerank_batch_size: int = 4
+    rerank_max_chars: int = 4000
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen3:8b"
     ollama_keep_alive: int = 0

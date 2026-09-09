@@ -12,6 +12,8 @@ class SearchRequest(BaseModel):
     document_name: str | None = Field(default=None, max_length=200)
     created_from: date | None = None
     created_to: date | None = None
+    knowledge_base_id: uuid.UUID | None = None
+    tags: list[str] = Field(default_factory=list, max_length=20)
     limit: int = Field(default=10, ge=1, le=50)
 
 
@@ -31,9 +33,24 @@ class SearchResult(BaseModel):
     section_path: list[str]
     ocr_confidence: float | None
     match_type: str
+    keyword_score: float | None = None
+    vector_score: float | None = None
+    fusion_score: float
+    rerank_score: float | None = None
+    final_score: float
+
+
+class SearchDiagnostics(BaseModel):
+    normalized_query: str
+    expanded_terms: list[str]
+    mode: str
+    warning: str | None = None
+    no_answer_reason: str | None = None
+    timings_ms: dict[str, float] = Field(default_factory=dict)
 
 
 class SearchResponse(BaseModel):
     query: str
     items: list[SearchResult]
     total: int
+    diagnostics: SearchDiagnostics

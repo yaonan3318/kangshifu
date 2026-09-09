@@ -21,6 +21,7 @@ def company_search_handler(service: SearchService):
             "citation": index, "document": item.document_name, "chunk_id": str(item.chunk_id),
             "sequence": item.sequence_number, "page": item.page_start, "slide": item.slide_number,
             "sheet": item.sheet_name, "content": item.content, "match_type": item.match_type,
+            "score": round(item.final_score, 4),
         } for index, item in enumerate(results, start=1)]
         return ToolResult(summary=f"找到 {len(data)} 条公司资料片段", data=data)
     return handler
