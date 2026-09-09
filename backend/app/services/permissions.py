@@ -97,7 +97,7 @@ class PermissionResolver:
             DocumentAcl.document_id == document.id,
             DocumentAcl.permission == AclPermission.MANAGE,
             or_(
-                DocumentAcl.subject_type == SubjectType.USER,
+                (DocumentAcl.subject_type == SubjectType.USER) & (DocumentAcl.subject_id == self.user.id),
                 (DocumentAcl.subject_type == SubjectType.DEPARTMENT) & DocumentAcl.subject_id.in_(self.department_ids),
                 (DocumentAcl.subject_type == SubjectType.ROLE) & DocumentAcl.subject_id.in_(self.role_ids),
             ),

@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.models import Document, DocumentChunk, KnowledgeBase, Tag
+from app.models import Document, DocumentAcl, DocumentChunk, KnowledgeBase, Tag
 from app.schemas.search import RetrievalStageItem, SearchDiagnostics, SearchRequest, SearchResult
 from app.services.embeddings import EmbeddingService
 from app.services.keywords import keyword_text
@@ -41,11 +41,27 @@ class SearchService:
     def __init__(self, session: Session, settings: Settings, user=None):
         self.session = session
         self.settings = settings
+        self.user = user
         self.embeddings = EmbeddingService(settings)
         self.processor = QueryProcessor(settings.search_synonyms)
         self.reranker = Reranker(settings)
         # 普通用户只检索对其可见的资料；管理员/无用户上下文不限制。
         self.resolver = PermissionResolver(session, user) if user is not None else None
+
+    def permission_cache_scope(self) -> str:
+        """Build a per-user cache partition that changes with ACL membership."""
+        if self.user is None:
+            return "unauthenticated"
+        roles = "-".join(sorted(str(role.id) for role in self.user.roles))
+        department_ids = self.resolver.department_ids if self.resolver else []
+        departments = "-".join(sorted(str(item) for item in department_ids))
+        acl_count, acl_latest = self.session.execute(
+            select(func.count(DocumentAcl.id), func.max(DocumentAcl.created_at))
+        ).one()
+        return (
+            f"user:{self.user.id}|admin:{int(self.user.is_super_admin)}|"
+            f"departments:{departments}|roles:{roles}|acl:{acl_count}:{acl_latest or ''}"
+        )
 
     def search(self, request: SearchRequest) -> list[SearchResult]:
         return self.search_with_diagnostics(request).items

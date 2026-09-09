@@ -206,9 +206,10 @@ class AnswerRecorder:
         assistant = self.session.get(ChatMessage, message_id)
         if assistant is None or assistant.role != ChatMessageRole.ASSISTANT:
             raise KeyError("待重新生成的回答不存在")
-        session_row = assistant.session
-        if session_row is None:
-            raise KeyError("会话不存在")
+        # Reuse the normal ownership lookup so knowing a message UUID does not
+        # allow one user to overwrite another user's persisted answer.
+        service = ChatService(self.session, user=self.user)
+        session_row = service.get(assistant.session_id, include_archived=True)
         self.session.query(ChatMessageSource).filter(
             ChatMessageSource.message_id == assistant.id
         ).delete(synchronize_session=False)

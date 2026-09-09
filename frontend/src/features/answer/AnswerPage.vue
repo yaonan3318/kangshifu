@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import type { Ref } from 'vue'
 import { ApiError } from '../../api/documents'
 import { getAnswerStatus, streamAnswer, warmUpAnswer } from '../../api/answer'
 import type { AnswerEvent, AnswerMetrics, AnswerSource, AnswerStatus, AnswerTurn, CitationSource } from '../../types/answer'
@@ -18,9 +19,12 @@ import SessionSidebar from './SessionSidebar.vue'
 import ReferenceDrawer from './ReferenceDrawer.vue'
 import HarnessTimeline from './HarnessTimeline.vue'
 import HarnessApprovalCard from './HarnessApproval.vue'
+import type { AuthUser } from '../../api/auth'
 
 const ACTIVE_SESSION_KEY = 'company-search-active-session'
 const DRAFT_KEY = 'company-search-draft'
+const currentUser = inject<Ref<AuthUser | null>>('currentUser', ref(null))
+const isAdmin = computed(() => Boolean(currentUser.value?.is_super_admin))
 
 const question = ref('')
 const useDeepseek = ref(false)
@@ -32,7 +36,7 @@ const namespaces = ref<string[]>([])
 const approvalBusy = ref(false)
 const deploymentYaml = ref('')
 const advancedOpen = ref(false)
-const showHarnessAdvanced = computed(() => useHarness.value || advancedOpen.value)
+const showHarnessAdvanced = computed(() => isAdmin.value && (useHarness.value || advancedOpen.value))
 const status = ref<AnswerStatus | null>(null)
 const statusError = ref('')
 const knowledgeBases = ref<KnowledgeBaseRecord[]>([])
@@ -93,8 +97,13 @@ const stageLabels: Record<string, string> = {
 async function loadStatus() {
   try {
     status.value = await getAnswerStatus()
-    harnessStatus.value = await getHarnessStatus()
-    if (!selectedContext.value && harnessStatus.value.contexts.length) selectedContext.value = harnessStatus.value.contexts[0]
+    if (isAdmin.value) {
+      harnessStatus.value = await getHarnessStatus()
+      if (!selectedContext.value && harnessStatus.value.contexts.length) selectedContext.value = harnessStatus.value.contexts[0]
+    } else {
+      useHarness.value = false
+      harnessStatus.value = null
+    }
     statusError.value = ''
     if (ollamaReady.value && !warmed.value) {
       warmed.value = true
@@ -229,7 +238,7 @@ function turnFromHistory(messages: ChatMessageRecord[]): AnswerTurn[] {
       }
     } else if (message.role === 'ASSISTANT') {
       const hasContent = Boolean(message.content)
-      const turn = pending ?? {
+      const turn: AnswerTurn = pending ?? {
         key: message.id,
         userMessageId: null,
         assistantMessageId: message.id,
@@ -978,7 +987,7 @@ onBeforeUnmount(() => {
           <div class="qa-advanced-body">
             <label class="qa-field"><span>知识库范围</span><select v-model="knowledgeBaseId"><option value="">全部知识库</option><option v-for="item in enabledBases" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
             <label class="deepseek-toggle"><input v-model="useDeepseek" type="checkbox"><span></span><b>使用 DeepSeek 增强</b></label>
-            <label class="deepseek-toggle"><input v-model="useHarness" type="checkbox"><span></span><b>使用 Harness</b></label>
+            <label v-if="isAdmin" class="deepseek-toggle"><input v-model="useHarness" type="checkbox"><span></span><b>使用 Harness</b></label>
           </div>
           <div v-if="showHarnessAdvanced" class="harness-environment">
             <label>Context<select v-model="selectedContext"><option value="" disabled>选择 Kubernetes context</option><option v-for="item in harnessStatus?.contexts || []" :key="item" :value="item">{{ item }}</option></select></label>
@@ -986,7 +995,7 @@ onBeforeUnmount(() => {
             <small v-if="useHarness && !harnessStatus?.kubectl_available">未找到 kubectl，Harness 无法运行。</small>
             <small v-else-if="useHarness && !harnessStatus?.enabled">请先在 backend/.env 配置允许的 context。</small>
           </div>
-          <details v-if="useHarness" class="harness-yaml-input"><summary>提交部署 YAML（可选）</summary><textarea v-model="deploymentYaml" rows="5" maxlength="1048576" placeholder="粘贴 Deployment、Service、ConfigMap 等白名单资源 YAML；执行前会进行服务端 dry-run 和差异预览。"></textarea></details>
+          <details v-if="isAdmin && useHarness" class="harness-yaml-input"><summary>提交部署 YAML（可选）</summary><textarea v-model="deploymentYaml" rows="5" maxlength="1048576" placeholder="粘贴 Deployment、Service、ConfigMap 等白名单资源 YAML；执行前会进行服务端 dry-run 和差异预览。"></textarea></details>
           <p v-if="useDeepseek" class="privacy-hint">
             开启后，本次问题、检索到的内部资料片段和本地初稿将发送给 DeepSeek。
             <strong v-if="status && !status.deepseek_configured">尚未配置 API Key，本次仍将使用千问本地回答。</strong>

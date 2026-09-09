@@ -268,6 +268,7 @@ class RagService:
     def _cache_key(self, request: AnswerRequest, cfg: dict) -> str:
         parts = [
             request.question.strip(),
+            self.search_service.permission_cache_scope(),
             str(request.assistant_id or ""),
             str(request.knowledge_base_id or ""),
             str(request.extension or ""),

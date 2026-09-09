@@ -3,7 +3,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -13,6 +13,8 @@ from app.models import DEFAULT_ASSISTANT_ID, Assistant, KnowledgeBase, assistant
 from app.schemas.assistant import (
     AssistantKnowledgeBasesPut, AssistantListResponse, AssistantOut, AssistantUpsert,
 )
+from app.api.auth import current_user
+from app.services.permissions import require_admin
 
 router = APIRouter(prefix="/api/assistants", tags=["assistants"])
 
@@ -71,9 +73,11 @@ def list_assistants(
 @router.post("", response_model=AssistantOut)
 def create_assistant(
     body: AssistantUpsert,
+    request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> AssistantOut:
     """新建助手；未提供名称时用默认名称。"""
+    require_admin(current_user(request))
     name = (body.name or "").strip() or "未命名助手"
     if session.scalar(select(Assistant).where(Assistant.name == name)) is not None:
         raise AppError("ASSISTANT_NAME_EXISTS", "已存在同名助手", 409)
@@ -110,17 +114,21 @@ def get_assistant(
 def update_assistant(
     assistant_id: uuid.UUID,
     body: AssistantUpsert,
+    request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> AssistantOut:
     """更新助手字段；仅更新显式提供的字段。"""
+    require_admin(current_user(request))
     return _assistant_payload(_apply(session, _load(session, assistant_id), body))
 
 
 @router.post("/{assistant_id}/enable", response_model=AssistantOut)
 def enable_assistant(
     assistant_id: uuid.UUID,
+    request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> AssistantOut:
+    require_admin(current_user(request))
     assistant = _load(session, assistant_id)
     assistant.enabled = True
     session.commit()
@@ -130,8 +138,10 @@ def enable_assistant(
 @router.post("/{assistant_id}/disable", response_model=AssistantOut)
 def disable_assistant(
     assistant_id: uuid.UUID,
+    request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> AssistantOut:
+    require_admin(current_user(request))
     assistant = _load(session, assistant_id)
     assistant.enabled = False
     session.commit()
@@ -142,9 +152,11 @@ def disable_assistant(
 def set_assistant_knowledge_bases(
     assistant_id: uuid.UUID,
     body: AssistantKnowledgeBasesPut,
+    request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> AssistantOut:
     """设置助手使用的知识库；传入空数组表示“全部启用知识库”。"""
+    require_admin(current_user(request))
     assistant = _load(session, assistant_id)
     ids = list(dict.fromkeys(body.knowledge_base_ids))
     if ids:
@@ -170,9 +182,11 @@ def set_assistant_knowledge_bases(
 @router.delete("/{assistant_id}")
 def delete_assistant(
     assistant_id: uuid.UUID,
+    request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> dict:
     """删除助手；默认助手不可删除。"""
+    require_admin(current_user(request))
     if assistant_id == DEFAULT_ASSISTANT_ID:
         raise AppError("DEFAULT_ASSISTANT_PROTECTED", "默认助手不可删除", 400)
     assistant = _load(session, assistant_id)
