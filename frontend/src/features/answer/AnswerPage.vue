@@ -17,7 +17,7 @@ import MarkdownView from '../../components/MarkdownView.vue'
 import SessionSidebar from './SessionSidebar.vue'
 import ReferenceDrawer from './ReferenceDrawer.vue'
 import HarnessTimeline from './HarnessTimeline.vue'
-import HarnessApproval from './HarnessApproval.vue'
+import HarnessApprovalCard from './HarnessApproval.vue'
 
 const ACTIVE_SESSION_KEY = 'company-search-active-session'
 const DRAFT_KEY = 'company-search-draft'
@@ -917,7 +917,7 @@ onBeforeUnmount(() => {
             <div v-if="turn.stopped && turn.answer" class="stopped-note">回答已被停止，以下是已生成的部分。</div>
 
             <HarnessTimeline :steps="turn.harnessSteps" />
-            <HarnessApproval v-if="turn.approval" :approval="turn.approval" :busy="approvalBusy" @confirm="decideApproval(turn, $event)" @reject="decideApproval(turn, null)" />
+            <HarnessApprovalCard v-if="turn.approval" :approval="turn.approval" :busy="approvalBusy" @confirm="decideApproval(turn, $event)" @reject="decideApproval(turn, null)" />
 
             <div v-if="!turn.generating && turn.assistantMessageId && turn.answer" class="feedback-bar">
               <span v-if="turn.feedbackRating" class="feedback-done">{{ turn.feedbackRating === 'UP' ? '已标记有帮助' : '已标记没帮助' }}</span>
