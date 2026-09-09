@@ -83,7 +83,7 @@ async def answer_stream(
         except KeyError as exc:
             raise AppError("CHAT_MESSAGE_NOT_FOUND", "待重新生成的回答不存在", 404) from exc
     else:
-        prepared = recorder.prepare(body.question, body.session_id)
+        prepared = recorder.prepare(body.question, body.session_id, assistant_id=body.assistant_id)
 
     async def events():
         is_harness = body.use_harness

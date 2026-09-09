@@ -43,15 +43,18 @@ class OllamaClient:
         except LlmError:
             return False
 
-    async def stream_with_stats(self, messages: list[GenerationMessage]):
-        """与 stream 相同，但逐段附带 Ollama 统计信息（token 数、done 标记）。"""
+    async def stream_with_stats(self, messages: list[GenerationMessage], model: str | None = None, temperature: float | None = None):
+        """与 stream 相同，但逐段附带 Ollama 统计信息（token 数、done 标记）。
+
+        model/temperature 可覆盖助手级配置，未传时使用 Settings 默认值。
+        """
         payload = {
-            "model": self.settings.ollama_model,
+            "model": model or self.settings.ollama_model,
             "messages": [message.model_dump() for message in messages],
             "stream": True,
             "think": False,
             "keep_alive": self.settings.ollama_keep_alive,
-            "options": {"temperature": 0.2},
+            "options": {"temperature": 0.2 if temperature is None else temperature},
         }
         timeout = httpx.Timeout(self.settings.ollama_timeout_seconds, connect=10.0)
         try:

@@ -28,8 +28,10 @@ class ChatService:
     def __init__(self, session: Session):
         self.session = session
 
-    def create(self, title: str | None = None) -> ChatSession:
+    def create(self, title: str | None = None, assistant_id: uuid.UUID | None = None) -> ChatSession:
         session = ChatSession(title=(title or DEFAULT_TITLE).strip() or DEFAULT_TITLE)
+        if assistant_id is not None:
+            session.assistant_id = assistant_id
         self.session.add(session)
         self.session.commit()
         self.session.refresh(session)

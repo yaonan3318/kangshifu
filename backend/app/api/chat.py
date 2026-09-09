@@ -98,7 +98,7 @@ def create_session(
     service: Annotated[ChatService, Depends(get_chat_service)],
 ) -> ChatSessionDetail:
     """新建会话；标题为空时使用默认“新会话”，首个问题会触发自动命名。"""
-    return _session_payload(service.create(body.title), service)
+    return _session_payload(service.create(body.title, body.assistant_id), service)
 
 
 @router.get("/sessions/{session_id}", response_model=ChatSessionDetail)

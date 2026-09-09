@@ -17,6 +17,7 @@ class ConversationTurn(BaseModel):
 class AnswerRequest(BaseModel):
     question: str = Field(min_length=1, max_length=1000)
     session_id: uuid.UUID | None = None
+    assistant_id: uuid.UUID | None = None
     regenerate_message_id: uuid.UUID | None = None
     knowledge_base_id: uuid.UUID | None = None
     use_deepseek: bool = False

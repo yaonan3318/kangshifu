@@ -9,6 +9,7 @@ from app.models.knowledge_base import DEFAULT_KNOWLEDGE_BASE_ID, KnowledgeBase
 from app.models.tag import Tag, document_tags
 from app.models.retrieval_evaluation import RetrievalTestCase, RetrievalTestRun
 from app.models.chat import ChatMessage, ChatMessageRole, ChatMessageSource, ChatMessageStatus, ChatProvider, ChatSession
+from app.models.assistant import DEFAULT_ASSISTANT_ID, Assistant, assistant_knowledge_bases
 
 __all__ = [
     "ApprovalStatus", "Document", "DocumentStatus", "DocumentChunk", "HarnessApproval", "HarnessStep",
@@ -16,4 +17,5 @@ __all__ = [
     "BatchFile", "BatchProcessingStatus", "BatchStatus", "BatchUploadStatus", "UploadBatch",
     "DEFAULT_KNOWLEDGE_BASE_ID", "KnowledgeBase", "Tag", "document_tags", "RetrievalTestCase", "RetrievalTestRun",
     "ChatMessage", "ChatMessageRole", "ChatMessageSource", "ChatMessageStatus", "ChatProvider", "ChatSession",
+    "DEFAULT_ASSISTANT_ID", "Assistant", "assistant_knowledge_bases",
 ]

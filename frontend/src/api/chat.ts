@@ -18,10 +18,10 @@ function sessionParams(search?: string, archived?: boolean, page = 1, pageSize =
 export const listChatSessions = async (search?: string, archived?: boolean): Promise<ChatSessionListResponse> =>
   parse(await fetch(`/api/chat/sessions?${sessionParams(search, archived)}`))
 
-export const createChatSession = async (title?: string): Promise<ChatSessionDetail> =>
+export const createChatSession = async (title?: string, assistantId?: string): Promise<ChatSessionDetail> =>
   parse(await fetch('/api/chat/sessions', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: title || null }),
+    body: JSON.stringify({ title: title || null, assistant_id: assistantId || null }),
   }))
 
 export const getChatSession = async (id: string): Promise<ChatSessionDetail> =>

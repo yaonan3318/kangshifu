@@ -22,6 +22,7 @@ from app.api.knowledge_bases import router as knowledge_bases_router
 from app.api.chunks import router as chunks_router
 from app.api.retrieval_lab import router as retrieval_lab_router
 from app.api.chat import router as chat_router
+from app.api.assistants import router as assistants_router
 from app.config import Settings, get_settings
 from app.errors import AppError
 from app.llm.ollama import OllamaClient
@@ -90,6 +91,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(chunks_router)
     app.include_router(retrieval_lab_router)
     app.include_router(chat_router)
+    app.include_router(assistants_router)
     return app
 
 

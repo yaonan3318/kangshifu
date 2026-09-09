@@ -59,6 +59,7 @@ class ChatSessionDetail(ChatSessionBase):
 
 class ChatSessionCreate(BaseModel):
     title: str | None = Field(default=None, max_length=255)
+    assistant_id: uuid.UUID | None = None
 
 
 class ChatSessionPatch(BaseModel):

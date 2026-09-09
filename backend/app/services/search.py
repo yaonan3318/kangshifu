@@ -95,6 +95,8 @@ class SearchService:
             clauses.append(Document.original_name.ilike(f"%{request.document_name.strip()}%"))
         if request.knowledge_base_id:
             clauses.append(Document.knowledge_base_id == request.knowledge_base_id)
+        if request.knowledge_base_ids:
+            clauses.append(Document.knowledge_base_id.in_(request.knowledge_base_ids))
         if request.tags:
             clauses.append(Document.tags.any(Tag.name.in_([tag.strip() for tag in request.tags if tag.strip()])))
         if request.created_from:

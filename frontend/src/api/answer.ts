@@ -19,6 +19,7 @@ export async function warmUpAnswer(): Promise<{ warmed: boolean; message: string
 export interface StreamAnswerInput {
   question: string
   sessionId?: string
+  assistantId?: string
   regenerateMessageId?: string
   knowledgeBaseId?: string
   useDeepseek: boolean
@@ -45,6 +46,7 @@ export async function streamAnswer(
     body: JSON.stringify({
       question: input.question,
       session_id: input.sessionId || null,
+      assistant_id: input.assistantId || null,
       regenerate_message_id: input.regenerateMessageId || null,
       knowledge_base_id: input.knowledgeBaseId || null,
       use_deepseek: input.useDeepseek,

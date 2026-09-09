@@ -4,15 +4,17 @@ import AnswerPage from './features/answer/AnswerPage.vue'
 import DocumentLibrary from './features/documents/DocumentLibrary.vue'
 import SearchPage from './features/search/SearchPage.vue'
 import RetrievalLab from './features/search/RetrievalLab.vue'
+import AssistantManager from './features/assistants/AssistantManager.vue'
 
-type PageKey = 'answer' | 'search' | 'library' | 'lab'
+type PageKey = 'answer' | 'search' | 'library' | 'lab' | 'assistants'
 
 const page = ref<PageKey>('answer')
-const pages: Record<PageKey, typeof AnswerPage> = {
+const pages: Record<PageKey, unknown> = {
   answer: AnswerPage,
   search: SearchPage,
   library: DocumentLibrary,
   lab: RetrievalLab,
+  assistants: AssistantManager,
 }
 
 const activePage = computed(() => pages[page.value])
@@ -32,6 +34,7 @@ onUnmounted(() => window.removeEventListener('company-switch-page', onSwitchPage
     <button :class="{ active: page === 'search' }" @click="page = 'search'">资料检索</button>
     <button :class="{ active: page === 'library' }" @click="page = 'library'">资料库</button>
     <button :class="{ active: page === 'lab' }" @click="page = 'lab'">检索实验室</button>
+    <button :class="{ active: page === 'assistants' }" @click="page = 'assistants'">助手管理</button>
   </nav>
   <KeepAlive>
     <component :is="activePage" />

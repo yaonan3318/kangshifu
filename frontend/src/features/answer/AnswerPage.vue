@@ -5,6 +5,8 @@ import { getAnswerStatus, streamAnswer, warmUpAnswer } from '../../api/answer'
 import type { AnswerEvent, AnswerMetrics, AnswerSource, AnswerStatus, AnswerTurn, CitationSource } from '../../types/answer'
 import { listKnowledgeBases } from '../../api/knowledgeBases'
 import type { KnowledgeBaseRecord } from '../../types/knowledgeBases'
+import { listAssistants } from '../../api/assistants'
+import type { AssistantRecord } from '../../types/assistant'
 import { getHarnessStatus, getNamespaces, confirmApproval, getHarnessTask, rejectApproval, resumeHarness } from '../../api/harness'
 import type { HarnessStatus } from '../../types/harness'
 import { archiveChatSession, createChatSession, deleteChatSession, getChatSession, listChatSessions, renameChatSession, restoreChatSession } from '../../api/chat'
@@ -34,6 +36,10 @@ const status = ref<AnswerStatus | null>(null)
 const statusError = ref('')
 const knowledgeBases = ref<KnowledgeBaseRecord[]>([])
 const knowledgeBaseId = ref('')
+const assistants = ref<AssistantRecord[]>([])
+const currentAssistantId = ref('')
+const currentAssistant = computed(() => assistants.value.find((item) => item.id === currentAssistantId.value) ?? assistants.value[0] ?? null)
+const assistantAvatar = computed(() => currentAssistant.value?.avatar || '康')
 
 const sessions = ref<ChatSessionItem[]>([])
 const sessionsLoading = ref(false)
@@ -59,10 +65,21 @@ const activeTurns = computed(() => (activeSessionId.value ? sessionCache[activeS
 
 const kbName = computed(() => {
   const match = knowledgeBases.value.find((item) => item.id === knowledgeBaseId.value)
-  return match ? match.name : '全部知识库'
+  return match ? match.name : null
 })
 const enabledBases = computed(() => knowledgeBases.value.filter((item) => item.enabled))
 const ollamaReady = computed(() => Boolean(status.value?.ollama.reachable && status.value?.ollama.installed))
+const scopeLabel = computed(() => {
+  if (kbName.value) return kbName.value
+  const assistant = currentAssistant.value
+  if (assistant) {
+    if (assistant.knowledge_base_ids.length === 1) {
+      return knowledgeBases.value.find((item) => item.id === assistant.knowledge_base_ids[0])?.name || '已限定知识库'
+    }
+    if (assistant.knowledge_base_ids.length > 1) return `已限定 ${assistant.knowledge_base_ids.length} 个知识库`
+  }
+  return '全部知识库'
+})
 
 const stageLabels: Record<string, string> = {
   understanding: '正在理解问题',
@@ -103,12 +120,20 @@ async function loadKnowledgeBases() {
   try {
     const result = await listKnowledgeBases()
     knowledgeBases.value = result.items
-    if (!knowledgeBaseId.value) {
-      const firstEnabled = result.items.find((item) => item.enabled)
-      knowledgeBaseId.value = firstEnabled?.id ?? ''
-    }
   } catch {
     // 知识库不影响问答主流程
+  }
+}
+
+async function loadAssistants() {
+  try {
+    const result = await listAssistants(true)
+    assistants.value = result.items
+    if (!currentAssistantId.value && assistants.value.length) {
+      currentAssistantId.value = assistants.value[0].id
+    }
+  } catch {
+    // 助手列表不可用不影响基本问答
   }
 }
 
@@ -269,6 +294,7 @@ async function loadSession(sessionId: string, refreshMeta = true) {
     sessionCache[sessionId] = turnFromHistory(detail.messages)
     activeSessionId.value = sessionId
     activeSessionTitle.value = detail.title
+    if (detail.assistant_id) currentAssistantId.value = detail.assistant_id
     storeActiveSession(sessionId)
     if (refreshMeta) await refreshSessions()
     await nextTick()
@@ -283,7 +309,7 @@ async function loadSession(sessionId: string, refreshMeta = true) {
 async function newSession() {
   if (activeController.value) return
   try {
-    const detail = await createChatSession()
+    const detail = await createChatSession(undefined, currentAssistantId.value || undefined)
     sessionCache[detail.id] = []
     activeSessionId.value = detail.id
     activeSessionTitle.value = detail.title
@@ -362,7 +388,7 @@ async function ask(suggested?: string) {
   let sessionId = activeSessionId.value
   if (!sessionId) {
     try {
-      const detail = await createChatSession()
+      const detail = await createChatSession(undefined, currentAssistantId.value || undefined)
       sessionId = detail.id
       sessionCache[detail.id] = []
       activeSessionId.value = detail.id
@@ -407,6 +433,7 @@ async function ask(suggested?: string) {
     const outcome = await streamAnswer({
       question: value,
       sessionId,
+      assistantId: currentAssistantId.value || undefined,
       knowledgeBaseId: knowledgeBaseId.value || undefined,
       useDeepseek: useDeepseek.value,
       useHarness: useHarness.value,
@@ -473,6 +500,7 @@ async function regenerate(turn: AnswerTurn) {
     const outcome = await streamAnswer({
       question: turn.question,
       sessionId: activeSessionId.value,
+      assistantId: currentAssistantId.value || undefined,
       regenerateMessageId: assistantMessageId,
       knowledgeBaseId: knowledgeBaseId.value || undefined,
       useDeepseek: useDeepseek.value,
@@ -604,8 +632,7 @@ function sourceLocation(source: CitationSource): string {
   return source.location_text
 }
 
-function providerLabel(turn: AnswerTurn): string {
-  if (turn.scope === 'GENERAL') return 'DeepSeek 通用知识'
+function providerLabel(turn: AnswerTurn): string {  if (turn.scope === 'GENERAL') return 'DeepSeek 通用知识'
   if (turn.provider === 'DEEPSEEK') return 'DeepSeek 增强'
   if (turn.provider === 'HARNESS') return 'Harness 执行'
   return '千问本地回答'
@@ -646,6 +673,26 @@ function latencySummary(turn: AnswerTurn): string {
   ]
   if (metrics.cache_hit) parts.push('缓存命中')
   return parts.join(' · ')
+}
+
+const fallbackQuestions = [
+  '公司目前采用什么气泡检测方案？',
+  'Go 服务如何部署到 Kubernetes？',
+  '最新的休假和考勤制度是什么？',
+  '报销流程需要提交哪些材料？',
+  '质检报告主要包含哪些指标？',
+  '如何申请内网服务器权限？',
+]
+const suggestionQuestions = computed(() => {
+  const configured = currentAssistant.value?.recommended_questions ?? []
+  return configured.length ? configured.slice(0, 6) : fallbackQuestions
+})
+
+function welcomeCopy(): string {
+  const message = currentAssistant.value?.welcome_message
+  if (message) return message
+  const name = currentAssistant.value?.name || '康师傅公司助手'
+  return `你好，我是${name}，可以基于公司内部资料回答你的问题。`
 }
 
 async function scrollToBottom(smooth: boolean) {
@@ -714,6 +761,7 @@ async function restorePendingApproval() {
 onMounted(() => {
   const draft = window.localStorage.getItem(DRAFT_KEY)
   if (draft) question.value = draft
+  void loadAssistants()
   void loadStatus()
   void loadKnowledgeBases()
   void restoreInitialSession().then(() => restorePendingApproval())
@@ -746,14 +794,20 @@ onBeforeUnmount(() => {
     <main class="qa-main">
       <header class="qa-topbar">
         <div class="qa-assistant">
-          <span class="qa-avatar">康</span>
+          <span class="qa-avatar">{{ assistantAvatar }}</span>
           <div>
-            <strong>康师傅公司助手</strong>
-            <span>公司综合知识助手</span>
+            <strong>{{ currentAssistant?.name || '康师傅公司助手' }}</strong>
+            <span>{{ currentAssistant?.description || '公司综合知识助手' }}</span>
           </div>
         </div>
+        <label v-if="assistants.length > 1" class="assistant-switch">
+          助手
+          <select v-model="currentAssistantId">
+            <option v-for="item in assistants" :key="item.id" :value="item.id">{{ item.name }}</option>
+          </select>
+        </label>
         <div class="qa-topmeta">
-          <span class="qa-chip" title="当前检索范围">{{ kbName }}</span>
+          <span class="qa-chip" :title="'当前检索范围'">{{ scopeLabel }}</span>
           <span class="qa-chip" :class="ollamaReady ? 'is-ready' : 'is-offline'">
             {{ ollamaReady ? '千问已就绪' : '本地模型未就绪' }}
           </span>
@@ -770,18 +824,11 @@ onBeforeUnmount(() => {
 
       <div ref="scrollPane" class="qa-scroll">
         <div v-if="!activeTurns.length && !loadingSession" class="qa-welcome">
-          <div class="welcome-avatar">康</div>
-          <h2>你好，我是康师傅公司助手</h2>
-          <p>我可以基于公司内部资料回答技术、制度、产品和运营问题。资料和回答都保存在本机。</p>
+          <div class="welcome-avatar">{{ assistantAvatar }}</div>
+          <h2>{{ welcomeCopy() }}</h2>
+          <p>资料检索范围由所选助手决定；回答会标注来源，点击 [n] 可查看引用原文。</p>
           <div class="welcome-suggestions">
-            <button v-for="item in [
-              '公司目前采用什么气泡检测方案？',
-              'Go 服务如何部署到 Kubernetes？',
-              '最新的休假和考勤制度是什么？',
-              '报销流程需要提交哪些材料？',
-              '质检报告主要包含哪些指标？',
-              '如何申请内网服务器权限？',
-            ]" :key="item" type="button" class="suggestion-chip" @click="ask(item)">{{ item }}</button>
+            <button v-for="item in suggestionQuestions" :key="item" type="button" class="suggestion-chip" @click="ask(item)">{{ item }}</button>
           </div>
           <div v-if="knowledgeBases.length" class="welcome-kbs">
             <strong>常用知识库</strong>

@@ -13,6 +13,8 @@ class SearchRequest(BaseModel):
     created_from: date | None = None
     created_to: date | None = None
     knowledge_base_id: uuid.UUID | None = None
+    # 助手知识库范围：允许检索的知识库白名单；为空表示不限制。
+    knowledge_base_ids: list[uuid.UUID] = Field(default_factory=list, max_length=50)
     tags: list[str] = Field(default_factory=list, max_length=20)
     include_stages: bool = False
     limit: int = Field(default=10, ge=1, le=50)
