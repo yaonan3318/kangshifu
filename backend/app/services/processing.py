@@ -112,6 +112,7 @@ class ProcessingService:
                 page_start=chunk.page_start, page_end=chunk.page_end, slide_number=chunk.slide_number,
                 sheet_name=chunk.sheet_name, row_start=chunk.row_start, row_end=chunk.row_end,
                 section_path=chunk.section_path, ocr_confidence=chunk.ocr_confidence,
+                token_count=len(keyword_text(chunk.content).split()),
             ))
         document.status = DocumentStatus.PARSED
         document.parser_name = parser.name

@@ -196,8 +196,13 @@ class DocumentService:
         ))
         return chunks, total
 
-    def reprocess(self, document_id: uuid.UUID) -> Document:
+    def reprocess(self, document_id: uuid.UUID, confirm_overwrite: bool = False) -> Document:
         document = self.get(document_id)
+        edited = self.session.scalar(select(DocumentChunk.id).where(
+            DocumentChunk.document_id == document_id, DocumentChunk.manually_edited.is_(True)
+        ).limit(1))
+        if edited and not confirm_overwrite:
+            raise AppError("MANUAL_CHUNKS_WOULD_BE_LOST", "重新处理会覆盖人工修改的片段，请确认后继续", 409)
         active = self.session.scalar(select(ProcessingJob.id).where(
             ProcessingJob.document_id == document_id,
             ProcessingJob.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),

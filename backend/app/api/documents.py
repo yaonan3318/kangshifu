@@ -117,9 +117,10 @@ def get_document_content(
 def reprocess_document(
     document_id: uuid.UUID,
     service: Annotated[DocumentService, Depends(get_document_service)],
+    confirm_overwrite: bool = False,
 ) -> DocumentResponse:
     """清除旧片段并重新排队解析，适用于修复 OCR/解析配置后重试。"""
-    return document_response(service.reprocess(document_id), service)
+    return document_response(service.reprocess(document_id, confirm_overwrite), service)
 
 
 @router.get("/{document_id}/download")

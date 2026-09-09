@@ -18,6 +18,7 @@ from app.api.answer import router as answer_router
 from app.api.harness import router as harness_router
 from app.api.batches import router as batches_router
 from app.api.knowledge_bases import router as knowledge_bases_router
+from app.api.chunks import router as chunks_router
 from app.config import Settings, get_settings
 from app.errors import AppError
 
@@ -68,6 +69,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(harness_router)
     app.include_router(batches_router)
     app.include_router(knowledge_bases_router)
+    app.include_router(chunks_router)
     return app
 
 
