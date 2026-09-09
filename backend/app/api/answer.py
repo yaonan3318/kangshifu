@@ -18,6 +18,7 @@ from app.errors import AppError
 from app.models.chat import ChatProvider
 from app.schemas.answer import AnswerEvent, AnswerRequest, AnswerStatusResponse
 from app.services.chat import AnswerRecorder, ChatService
+from app.services.audit import record as audit_record
 from app.services.harness import HarnessService
 from app.services.rag import RagService
 
@@ -119,13 +120,21 @@ async def answer_stream(
                     text_parts.append(event.text)
                 elif event.type == "done":
                     content = "".join(text_parts)
+                    provider = _provider_value(event)
                     recorder.complete(
                         content,
-                        _provider_value(event),
+                        provider,
                         event.scope.value if event.scope is not None else None,
                         sources,
                         metrics=metrics_payload,
                     )
+                    if provider == ChatProvider.DEEPSEEK:
+                        audit_record(
+                            session, "external_llm_call", user=chat_user,
+                            target_type="chat_session", target_id=prepared.id,
+                            detail={"scope": event.scope.value if event.scope is not None else None, "provider": "DEEPSEEK"},
+                            ip_address=request.client.host if request.client else None,
+                        )
                     finalized = True
                 elif event.type == "harness_done":
                     content = "".join(text_parts)

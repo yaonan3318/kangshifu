@@ -63,6 +63,9 @@ class Document(Base):
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # 敏感级别与是否允许发送外部大模型；RESTRICTED/CONFIDENTIAL 或禁止外发时只允许本地千问回答。
+    sensitivity_level: Mapped[str] = mapped_column(String(32), default="INTERNAL")
+    external_llm_allowed: Mapped[bool] = mapped_column(Boolean, default=True)
     metadata_json: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

@@ -5,6 +5,7 @@ from app.models.identity import (
     AclPermission, AuthSession, Department, DocumentAcl, DocumentVisibility,
     Role, SubjectType, User, user_roles,
 )
+from app.models.audit import AuditLog
 from app.models.document_chunk import DocumentChunk
 from app.models.processing_job import JobStatus, JobType, ProcessingJob
 from app.models.harness import ApprovalStatus, HarnessApproval, HarnessStep, HarnessStepStatus, HarnessTask, HarnessTaskStatus
@@ -23,5 +24,5 @@ __all__ = [
     "ChatMessage", "ChatMessageRole", "ChatMessageSource", "ChatMessageStatus", "ChatProvider", "ChatSession",
     "DEFAULT_ASSISTANT_ID", "Assistant", "assistant_knowledge_bases",
     "AclPermission", "AuthSession", "Department", "DocumentAcl", "DocumentVisibility",
-    "Role", "SubjectType", "User", "user_roles",
+    "Role", "SubjectType", "User", "user_roles", "AuditLog",
 ]

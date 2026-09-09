@@ -26,6 +26,7 @@ from app.api.knowledge_bases import router as knowledge_bases_router
 from app.api.chunks import router as chunks_router
 from app.api.retrieval_lab import router as retrieval_lab_router
 from app.api.chat import router as chat_router
+from app.api.audit import router as audit_router
 from app.config import Settings, get_settings
 from app.db import SessionLocal, get_session
 from app.errors import AppError
@@ -137,6 +138,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(assistants_router)
     app.include_router(auth_router)
     app.include_router(user_router)
+    app.include_router(audit_router)
     return app
 
 

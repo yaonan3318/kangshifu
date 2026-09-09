@@ -14,6 +14,7 @@ from app.db import get_session
 from app.models import DocumentAcl, DocumentVisibility
 from app.models.document import DocumentStatus
 from app.schemas.documents import DocumentChunkResponse, DocumentContentResponse, DocumentDeleteRequest, DocumentFilters, DocumentListResponse, DocumentResponse, DocumentUpdateRequest
+from app.services.audit import record as audit_record
 from app.services.documents import DocumentService
 from app.services.managed_storage import ManagedStorage
 
@@ -32,11 +33,18 @@ def get_document_service(
 @router.post("/upload", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
 def upload_document(
     file: Annotated[UploadFile, File()],
+    request: Request,
     service: Annotated[DocumentService, Depends(get_document_service)],
     knowledge_base_id: Annotated[uuid.UUID | None, Form()] = None,
 ) -> DocumentResponse:
     """上传一个文件；内容重复时返回 409，而不会重复占用磁盘。"""
-    return document_response(service.upload(file, knowledge_base_id), service)
+    document = service.upload(file, knowledge_base_id)
+    audit_record(
+        service.session, "document_upload", user=getattr(request.state, "auth_user", None),
+        target_type="document", target_id=document.id,
+        detail={"name": document.original_name}, ip_address=request.client.host if request.client else None,
+    )
+    return document_response(document, service)
 
 
 def document_response(document, service: DocumentService) -> DocumentResponse:
@@ -93,8 +101,13 @@ def disable_document(document_id: uuid.UUID, service: Annotated[DocumentService,
 
 
 @router.post("/{document_id}/restore", response_model=DocumentResponse)
-def restore_document(document_id: uuid.UUID, service: Annotated[DocumentService, Depends(get_document_service)]):
-    return document_response(service.restore(document_id), service)
+def restore_document(document_id: uuid.UUID, request: Request, service: Annotated[DocumentService, Depends(get_document_service)]):
+    document = service.restore(document_id)
+    audit_record(
+        service.session, "document_restore", user=getattr(request.state, "auth_user", None),
+        target_type="document", target_id=document_id, ip_address=request.client.host if request.client else None,
+    )
+    return document_response(document, service)
 
 
 @router.get("/{document_id}/versions", response_model=list[DocumentResponse])
@@ -130,10 +143,16 @@ def reprocess_document(
 @router.get("/{document_id}/download")
 def download_document(
     document_id: uuid.UUID,
+    request: Request,
     service: Annotated[DocumentService, Depends(get_document_service)],
 ) -> FileResponse:
     """从受管磁盘目录下载原始附件。"""
     document = service.get(document_id)
+    audit_record(
+        service.session, "document_download", user=getattr(request.state, "auth_user", None),
+        target_type="document", target_id=document.id,
+        detail={"name": document.original_name}, ip_address=request.client.host if request.client else None,
+    )
     return FileResponse(
         service.storage.resolve(document.stored_path),
         media_type=document.mime_type,
@@ -144,18 +163,32 @@ def download_document(
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_document(
     document_id: uuid.UUID,
+    request: Request,
     service: Annotated[DocumentService, Depends(get_document_service)],
     body: DocumentDeleteRequest | None = None,
 ) -> Response:
     """将文档移入回收站；附件和索引继续保留以便恢复。"""
     service.delete(document_id, body.reason if body else None)
+    audit_record(
+        service.session, "document_delete", user=getattr(request.state, "auth_user", None),
+        target_type="document", target_id=document_id,
+        detail={"reason": body.reason if body else None}, ip_address=request.client.host if request.client else None,
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.delete("/{document_id}/purge", status_code=status.HTTP_204_NO_CONTENT)
-def purge_document(document_id: uuid.UUID, service: Annotated[DocumentService, Depends(get_document_service)]) -> Response:
+def purge_document(
+    document_id: uuid.UUID,
+    request: Request,
+    service: Annotated[DocumentService, Depends(get_document_service)],
+) -> Response:
     """永久删除回收站中的文档及原始附件。"""
     service.purge(document_id)
+    audit_record(
+        service.session, "document_purge", user=getattr(request.state, "auth_user", None),
+        target_type="document", target_id=document_id, ip_address=request.client.host if request.client else None,
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -174,12 +207,19 @@ class AccessPayload(BaseModel):
 def set_document_access(
     document_id: uuid.UUID,
     body: AccessPayload,
+    request: Request,
     service: Annotated[DocumentService, Depends(get_document_service)],
 ) -> DocumentResponse:
     """设置文档可见级别与 ACL；仅上传人、管理员或 MANAGE 授权者可操作。"""
     visibility = DocumentVisibility(body.visibility) if body.visibility else None
     acl = [entry.model_dump() for entry in body.acl] if body.acl is not None else None
-    return document_response(service.set_access(document_id, visibility=visibility, acl=acl), service)
+    document = service.set_access(document_id, visibility=visibility, acl=acl)
+    audit_record(
+        service.session, "document_access_change", user=getattr(request.state, "auth_user", None),
+        target_type="document", target_id=document_id,
+        detail={"visibility": body.visibility}, ip_address=request.client.host if request.client else None,
+    )
+    return document_response(document, service)
 
 
 @router.get("/{document_id}/acl")

@@ -51,9 +51,19 @@ async def login(
     """校验用户名密码并写入 HttpOnly 会话 Cookie。"""
     limiter.limit = settings.auth_login_rate_limit
     limiter.window = settings.auth_login_rate_window_seconds
-    limiter.check(request.client.host if request.client else None)
-    user = authenticate(session, body.username, body.password)
-    token = create_session_token(session, user, request.client.host if request.client else None, days=settings.auth_session_days)
+    ip = request.client.host if request.client else None
+    limiter.check(ip)
+    try:
+        user = authenticate(session, body.username, body.password)
+    except AppError:
+        from app.services.audit import record
+
+        record(session, "login_failed", detail={"username": body.username.strip()}, ip_address=ip)
+        raise
+    from app.services.audit import record
+
+    token = create_session_token(session, user, ip, days=settings.auth_session_days)
+    record(session, "login_success", user=user, detail={"username": user.username}, ip_address=ip)
     response.set_cookie(
         COOKIE, token, max_age=settings.auth_session_days * 86400,
         httponly=True, samesite="lax", path="/",

@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator
 from time import perf_counter
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
@@ -22,6 +22,7 @@ from app.schemas.answer import (
     AnswerWarning, KnowledgeScope,
 )
 from app.schemas.search import SearchRequest, SearchResult
+from app.services.audit import SENSITIVE_LEVELS_EXTERNAL_BLOCKED
 from app.services.search import SearchService
 
 NO_INTERNAL_ANSWER = "公司资料库中没有找到能够回答这个问题的内部资料。"
@@ -82,6 +83,7 @@ class RagService:
         outcome = self.search_service.search_with_diagnostics(self._search_request(request, cfg))
         results = outcome.items
         sources = self._sources(results)
+        cfg["content_allows_external"] = not bool(self._restricted_document_ids([item.document_id for item in sources]))
         yield AnswerEvent(type="sources", sources=sources)
         scope = self._internal_scope(results)
 
@@ -130,7 +132,8 @@ class RagService:
         provider = AnswerProvider.LOCAL
         deepseek_used = False
         deepseek_blocked = request.use_deepseek and not cfg["deepseek_allowed"]
-        # API Key 存在并不等于自动上传资料；助手允许且用户（或默认配置）开启时才增强。
+        content_blocked = bool(sources) and not cfg["content_allows_external"]
+        # API Key 存在并不等于自动上传资料；助手允许、内容允许且用户（或默认配置）开启时才增强。
         if deepseek_blocked:
             yield AnswerEvent(
                 type="warning",
@@ -139,7 +142,15 @@ class RagService:
                     message="当前助手策略不允许调用外部模型，本次使用本地模型回答。",
                 ),
             )
-        elif request.use_deepseek or cfg["default_deepseek_enabled"]:
+        elif content_blocked:
+            yield AnswerEvent(
+                type="warning",
+                warning=AnswerWarning(
+                    code="EXTERNAL_LLM_BLOCKED",
+                    message="资料策略禁止将检索到的资料发送到外部模型，本次使用本地模型回答。",
+                ),
+            )
+        elif (request.use_deepseek or cfg["default_deepseek_enabled"]) and cfg["content_allows_external"]:
             if not self.deepseek.configured:
                 yield AnswerEvent(
                     type="warning",
@@ -229,7 +240,23 @@ class RagService:
             "system_prompt": assistant.system_prompt if assistant is not None else None,
             "deepseek_allowed": assistant.use_deepseek_allowed if assistant is not None else True,
             "default_deepseek_enabled": assistant.default_deepseek_enabled if assistant is not None else False,
+            "content_allows_external": True,
         }
+
+    def _restricted_document_ids(self, document_ids: list) -> list:
+        """返回禁止外发或达到敏感级别的文档 id；命中任一即禁止整次外部增强。"""
+        if not document_ids:
+            return []
+        rows = self.search_service.session.scalars(
+            select(Document.id).where(
+                Document.id.in_(list(dict.fromkeys(document_ids))),
+                or_(
+                    Document.external_llm_allowed.is_(False),
+                    Document.sensitivity_level.in_(list(SENSITIVE_LEVELS_EXTERNAL_BLOCKED)),
+                ),
+            )
+        ).all()
+        return list(rows)
 
     def _cache_eligible(self, request: AnswerRequest, cfg: dict) -> bool:
         return bool(
