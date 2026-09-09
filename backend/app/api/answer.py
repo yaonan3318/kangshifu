@@ -72,6 +72,9 @@ async def answer_stream(
     """
     # 提前校验会话存在（归档会话也可继续提问），避免进入流式阶段后才发现 404。
     chat_user = getattr(request.state, "auth_user", None)
+    # Harness 可执行运维工具，权限闭环前仅限管理员使用，避免绕过文档权限。
+    if body.use_harness and (chat_user is None or not chat_user.is_super_admin):
+        raise AppError("HARNESS_FORBIDDEN", "Harness 功能仅限管理员使用", 403)
     chat = ChatService(session, user=chat_user)
     if body.session_id is not None:
         try:
