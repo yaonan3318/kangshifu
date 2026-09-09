@@ -45,6 +45,9 @@ class UploadBatch(Base):
     category: Mapped[str | None] = mapped_column(String(128))
     tags: Mapped[list[str]] = mapped_column(JSONB, default=list)
     note: Mapped[str | None] = mapped_column(Text)
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="RESTRICT"), index=True
+    )
     status: Mapped[BatchStatus] = mapped_column(Enum(BatchStatus, native_enum=False), index=True, default=BatchStatus.DRAFT)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

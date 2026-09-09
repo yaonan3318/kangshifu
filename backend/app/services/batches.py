@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 from app.config import Settings
 from app.errors import AppError, DocumentAlreadyProcessing
-from app.models import BatchFile, BatchProcessingStatus, BatchStatus, BatchUploadStatus, Document, DocumentStatus, JobStatus, JobType, ProcessingJob, UploadBatch
+from app.models import DEFAULT_KNOWLEDGE_BASE_ID, BatchFile, BatchProcessingStatus, BatchStatus, BatchUploadStatus, Document, DocumentStatus, JobStatus, JobType, KnowledgeBase, ProcessingJob, UploadBatch
 from app.schemas.batches import BatchDetailResponse, BatchResponse
 from app.services.documents import DocumentService
 from app.services.file_types import detect_allowed_type
@@ -24,12 +24,16 @@ class BatchService:
     def __init__(self, session: Session, settings: Settings):
         self.session, self.settings, self.storage = session, settings, ManagedStorage(settings)
 
-    def create(self, name: str, category: str | None, tags: list[str], note: str | None, files) -> UploadBatch:
+    def create(self, name: str, category: str | None, tags: list[str], note: str | None, files, knowledge_base_id: uuid.UUID | None = None) -> UploadBatch:
         if len(files) > self.settings.batch_max_files:
             raise AppError("BATCH_TOO_MANY_FILES", f"单个批次最多允许 {self.settings.batch_max_files} 个文件", 413)
         if sum(x.size_bytes for x in files) > self.settings.batch_max_total_bytes:
             raise AppError("BATCH_TOO_LARGE", "批次文件总容量超过配置上限", 413)
+        target_base = knowledge_base_id or DEFAULT_KNOWLEDGE_BASE_ID
+        if not self.session.scalar(select(KnowledgeBase.id).where(KnowledgeBase.id == target_base, KnowledgeBase.enabled.is_(True))):
+            raise AppError("KNOWLEDGE_BASE_NOT_FOUND", "目标知识库不存在或已停用", 404)
         batch = UploadBatch(name=name.strip(), category=category.strip() if category else None,
+            knowledge_base_id=target_base,
             tags=list(dict.fromkeys(x.strip() for x in tags if x.strip())), note=note)
         seen = set()
         for item in files:
@@ -73,7 +77,8 @@ class BatchService:
             else:
                 kind = detect_allowed_type(staged.temp_path, staged.original_name)
                 document = Document(id=uuid.uuid4(), original_name=staged.original_name, stored_path="", extension=kind.extension,
-                    mime_type=kind.mime_type, size_bytes=staged.size_bytes, sha256=staged.sha256, status=DocumentStatus.PENDING)
+                    mime_type=kind.mime_type, size_bytes=staged.size_bytes, sha256=staged.sha256, status=DocumentStatus.PENDING,
+                    knowledge_base_id=batch.knowledge_base_id, relative_path=path)
                 promoted = self.storage.promote(staged, document.id, kind.extension); document.stored_path = promoted
                 document.jobs.append(ProcessingJob(job_type=JobType.PARSE, status=JobStatus.QUEUED))
                 row.document, row.upload_status, row.processing_status = document, BatchUploadStatus.UPLOADED, BatchProcessingStatus.WAITING
@@ -110,7 +115,7 @@ class BatchService:
         batch = self.get(batch_id); batch.status = BatchStatus.CANCELLED; self.session.commit(); return batch
 
     def response(self, batch: UploadBatch, detail: bool = False):
-        data = dict(id=batch.id, name=batch.name, category=batch.category, tags=batch.tags, note=batch.note, status=batch.status,
+        data = dict(id=batch.id, name=batch.name, category=batch.category, tags=batch.tags, note=batch.note, knowledge_base_id=batch.knowledge_base_id, status=batch.status,
             created_at=batch.created_at, updated_at=batch.updated_at, completed_at=batch.completed_at, **self._counts(batch.files))
         return BatchDetailResponse(**data, files=sorted(batch.files, key=lambda x: x.relative_path)) if detail else BatchResponse(**data)
 

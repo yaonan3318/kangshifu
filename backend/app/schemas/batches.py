@@ -14,6 +14,7 @@ class BatchCreateRequest(BaseModel):
     category: str | None = Field(default=None, max_length=128)
     tags: list[str] = Field(default_factory=list, max_length=30)
     note: str | None = Field(default=None, max_length=2000)
+    knowledge_base_id: uuid.UUID | None = None
     files: list[BatchFileManifest] = Field(min_length=1)
 
 class BatchFileResponse(BaseModel):
@@ -24,7 +25,7 @@ class BatchFileResponse(BaseModel):
     error_code: str | None; error_message: str | None; created_at: datetime; updated_at: datetime
 
 class BatchResponse(BaseModel):
-    id: uuid.UUID; name: str; category: str | None; tags: list[str]; note: str | None; status: BatchStatus
+    id: uuid.UUID; name: str; category: str | None; tags: list[str]; note: str | None; knowledge_base_id: uuid.UUID; status: BatchStatus
     total_count: int; indexed_count: int; processing_count: int; duplicate_count: int; failed_count: int; pending_count: int
     created_at: datetime; updated_at: datetime; completed_at: datetime | None
 

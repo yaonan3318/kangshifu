@@ -24,6 +24,16 @@ class DocumentResponse(BaseModel):
     parser_version: str | None
     created_at: datetime
     updated_at: datetime
+    knowledge_base_id: uuid.UUID
+    relative_path: str | None
+    version_number: int
+    previous_version_id: uuid.UUID | None
+    enabled: bool
+    deleted_at: datetime | None
+    deleted_reason: str | None
+    metadata_json: dict
+    tags: list[str] = Field(default_factory=list)
+    chunk_count: int = 0
 
 
 class DocumentListResponse(BaseModel):
@@ -70,5 +80,19 @@ class DocumentFilters(BaseModel):
     query: str | None = Field(default=None, max_length=200)
     extension: str | None = Field(default=None, max_length=16)
     status: DocumentStatus | None = None
+    knowledge_base_id: uuid.UUID | None = None
+    tag: str | None = Field(default=None, max_length=128)
+    include_deleted: bool = False
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=25, ge=1, le=100)
+
+
+class DocumentUpdateRequest(BaseModel):
+    knowledge_base_id: uuid.UUID | None = None
+    relative_path: str | None = Field(default=None, max_length=2048)
+    metadata: dict | None = None
+    tags: list[str] | None = Field(default=None, max_length=30)
+
+
+class DocumentDeleteRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=1000)

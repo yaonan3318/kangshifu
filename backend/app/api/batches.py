@@ -15,7 +15,7 @@ def get_batch_service(session: Annotated[Session, Depends(get_session)], setting
 
 @router.post("", response_model=BatchResponse, status_code=status.HTTP_201_CREATED)
 def create_batch(body: BatchCreateRequest, service: Annotated[BatchService, Depends(get_batch_service)]):
-    return service.response(service.create(body.name, body.category, body.tags, body.note, body.files))
+    return service.response(service.create(body.name, body.category, body.tags, body.note, body.files, body.knowledge_base_id))
 
 @router.get("", response_model=BatchListResponse)
 def list_batches(service: Annotated[BatchService, Depends(get_batch_service)]):

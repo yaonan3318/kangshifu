@@ -31,6 +31,12 @@ def upgrade() -> None:
         "VALUES (:id, '默认知识库', '升级前及未指定知识库的公司资料', true)"
     ).bindparams(id=DEFAULT_KNOWLEDGE_BASE_ID))
 
+    op.add_column("upload_batches", sa.Column("knowledge_base_id", postgresql.UUID(as_uuid=True), nullable=True))
+    op.execute(sa.text("UPDATE upload_batches SET knowledge_base_id = :id").bindparams(id=DEFAULT_KNOWLEDGE_BASE_ID))
+    op.alter_column("upload_batches", "knowledge_base_id", nullable=False)
+    op.create_foreign_key("fk_upload_batches_knowledge_base", "upload_batches", "knowledge_bases", ["knowledge_base_id"], ["id"], ondelete="RESTRICT")
+    op.create_index("ix_upload_batches_knowledge_base_id", "upload_batches", ["knowledge_base_id"])
+
     op.add_column("documents", sa.Column("knowledge_base_id", postgresql.UUID(as_uuid=True), nullable=True))
     op.add_column("documents", sa.Column("relative_path", sa.String(2048)))
     op.add_column("documents", sa.Column("version_number", sa.Integer(), nullable=False, server_default="1"))
@@ -105,6 +111,9 @@ def downgrade() -> None:
         op.drop_column("document_chunks", column)
     op.drop_table("document_tags")
     op.drop_table("tags")
+    op.drop_index("ix_upload_batches_knowledge_base_id", table_name="upload_batches")
+    op.drop_constraint("fk_upload_batches_knowledge_base", "upload_batches", type_="foreignkey")
+    op.drop_column("upload_batches", "knowledge_base_id")
     for name in ("ix_documents_deleted_at", "ix_documents_enabled", "ix_documents_previous_version_id", "ix_documents_knowledge_base_id"):
         op.drop_index(name, table_name="documents")
     op.drop_constraint("fk_documents_previous_version", "documents", type_="foreignkey")
