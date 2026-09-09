@@ -48,6 +48,14 @@ class P1SecurityRegressionTests(unittest.TestCase):
         self.assertIn('v-if="isAdmin" class="deepseek-toggle"', answer_page)
         self.assertIn("if (isAdmin.value)", answer_page)
 
+    def test_fastapi_query_parameters_do_not_use_pydantic_field(self) -> None:
+        chat_api = source("backend/app/api/chat.py")
+        self.assertIn("page: int = Query(default=1, ge=1)", chat_api)
+        self.assertIn(
+            "page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=100)",
+            chat_api,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

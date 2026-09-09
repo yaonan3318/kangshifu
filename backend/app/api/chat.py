@@ -3,7 +3,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -82,8 +82,8 @@ def list_sessions(
     service: Annotated[ChatService, Depends(get_chat_service)],
     search: str | None = None,
     archived: bool | None = None,
-    page: int = Field(default=1, ge=1),
-    page_size: int = Field(default=DEFAULT_PAGE_SIZE, ge=1, le=100),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=100),
 ) -> ChatSessionListResponse:
     """按最近更新时间列出会话；可搜索标题、只看回收站/归档。"""
     rows, total = service.list_sessions(
