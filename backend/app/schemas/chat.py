@@ -34,6 +34,7 @@ class ChatMessageOut(BaseModel):
     error_message: str | None
     created_at: datetime
     completed_at: datetime | None
+    metrics: dict = Field(default_factory=dict)
     sources: list[ChatSourceSnapshot] = Field(default_factory=list)
 
 

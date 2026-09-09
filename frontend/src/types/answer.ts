@@ -2,6 +2,22 @@ export type AnswerProvider = 'LOCAL' | 'DEEPSEEK'
 export type KnowledgeScope = 'INTERNAL' | 'INTERNAL_LIMITED' | 'GENERAL' | 'NONE'
 export type AnswerStage = string
 
+export interface AnswerMetrics {
+  query_processing_ms?: number | null
+  keyword_search_ms?: number | null
+  vector_search_ms?: number | null
+  rerank_ms?: number | null
+  retrieval_ms?: number | null
+  llm_first_token_ms?: number | null
+  llm_generation_ms?: number | null
+  prompt_tokens?: number | null
+  completion_tokens?: number | null
+  total_ms?: number | null
+  source_count?: number | null
+  provider?: string | null
+  cache_hit?: boolean
+}
+
 export interface AnswerSource {
   citation_number: number
   chunk_id: string
@@ -31,12 +47,13 @@ export interface AnswerStatus {
 }
 
 export interface AnswerEvent {
-  type: 'stage' | 'sources' | 'delta' | 'replace' | 'warning' | 'done' | 'error' | 'harness_started' | 'tool_requested' | 'tool_running' | 'tool_result' | 'approval_required' | 'approval_result' | 'harness_done'
+  type: 'stage' | 'sources' | 'delta' | 'replace' | 'warning' | 'metrics' | 'done' | 'error' | 'harness_started' | 'tool_requested' | 'tool_running' | 'tool_result' | 'approval_required' | 'approval_result' | 'harness_done'
   stage?: AnswerStage | null
   provider?: AnswerProvider | null
   text?: string | null
   sources?: AnswerSource[] | null
   warning?: AnswerWarning | null
+  metrics?: AnswerMetrics | null
   scope?: KnowledgeScope | null
   deepseek_requested?: boolean | null
   deepseek_used?: boolean | null
@@ -99,6 +116,7 @@ export interface AnswerTurn {
   warnings: AnswerWarning[]
   provider: string
   scope: KnowledgeScope | null
+  metrics?: AnswerMetrics | null
   generating: boolean
   stage: string | null
   failed: boolean

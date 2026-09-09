@@ -50,7 +50,7 @@ class SearchService:
     def search_with_diagnostics(self, request: SearchRequest) -> SearchOutcome:
         started = perf_counter()
         processed = self.processor.process(request.query)
-        timings: dict[str, float] = {}
+        timings: dict[str, float] = {"query_processing": self._milliseconds(started)}
         if not processed.normalized:
             return self._empty(processed, timings, "检索内容为空")
 

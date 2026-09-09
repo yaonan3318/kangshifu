@@ -36,8 +36,12 @@ class Settings(BaseSettings):
     rerank_max_chars: int = 4000
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen3:8b"
-    ollama_keep_alive: int = 0
+    # 保活模式："5m" 为快速问答（回答结束后模型驻留 5 分钟）；"0" 为节省内存（回答后立即释放）。
+    # 支持数值秒数或 Ollama 时间串（如 10m、1h）。
+    ollama_keep_alive: str = "5m"
     ollama_timeout_seconds: float = 180.0
+    # 应用启动后是否预热本地模型，减少首次提问的模型加载等待。
+    ollama_warmup_enabled: bool = True
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
     deepseek_api_key: str = ""
@@ -45,6 +49,9 @@ class Settings(BaseSettings):
     rag_source_limit: int = 6
     rag_history_turns: int = 6
     rag_max_context_chars: int = 18_000
+    # 相同问题在资料版本与检索配置未变化时可命中内存回答缓存；关闭可节省内存。
+    answer_cache_enabled: bool = True
+    answer_cache_size: int = 48
     k8s_allowed_contexts: str = ""
     harness_max_steps: int = 8
     harness_timeout_seconds: int = 300

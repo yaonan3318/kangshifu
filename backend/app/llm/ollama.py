@@ -29,8 +29,22 @@ class OllamaClient:
         except (httpx.HTTPError, ValueError):
             return OllamaStatus(reachable=False, model=self.settings.ollama_model, installed=False)
 
-    async def stream(self, messages: list[GenerationMessage]) -> AsyncIterator[str]:
-        """逐段返回本地模型输出；keep_alive=0 会在回答后释放模型运行内存。"""
+    async def warmup(self) -> bool:
+        """发送一次极短请求把模型载入显存/内存，减少首次问答等待。"""
+        messages = [
+            GenerationMessage(role="system", content="请只回复两个字：就绪。"),
+            GenerationMessage(role="user", content="预热"),
+        ]
+        try:
+            async for item in self.stream_with_stats(messages):
+                if item.get("delta"):
+                    return True
+            return True
+        except LlmError:
+            return False
+
+    async def stream_with_stats(self, messages: list[GenerationMessage]):
+        """与 stream 相同，但逐段附带 Ollama 统计信息（token 数、done 标记）。"""
         payload = {
             "model": self.settings.ollama_model,
             "messages": [message.model_dump() for message in messages],
@@ -50,15 +64,24 @@ class OllamaClient:
                         if not line:
                             continue
                         data = json.loads(line)
-                        content = data.get("message", {}).get("content", "")
-                        if content:
-                            yield content
+                        yield {
+                            "delta": data.get("message", {}).get("content", ""),
+                            "prompt_eval_count": data.get("prompt_eval_count"),
+                            "eval_count": data.get("eval_count"),
+                            "done": bool(data.get("done")),
+                        }
         except httpx.TimeoutException as exc:
             raise LlmTimeout("OLLAMA_TIMEOUT", "千问本地模型响应超时") from exc
         except httpx.ConnectError as exc:
             raise LlmUnavailable("OLLAMA_UNAVAILABLE", "无法连接 Ollama，请先启动 Ollama") from exc
         except (json.JSONDecodeError, httpx.HTTPError) as exc:
             raise LlmUnavailable("OLLAMA_INVALID_RESPONSE", "千问本地模型返回异常") from exc
+
+    async def stream(self, messages: list[GenerationMessage]) -> AsyncIterator[str]:
+        """逐段返回本地模型输出；keep_alive 决定回答结束后模型是否驻留内存。"""
+        async for item in self.stream_with_stats(messages):
+            if item["delta"]:
+                yield item["delta"]
 
     async def complete_json(self, messages: list[GenerationMessage]) -> dict:
         """要求 Ollama 返回单个 JSON 对象，供 Harness 解析工具决策。"""

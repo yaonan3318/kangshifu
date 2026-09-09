@@ -512,3 +512,5 @@ td small { color: #8a9388; font-family: ui-monospace, monospace; }
   .qa-topbar { flex-direction: column; align-items: flex-start; }
   .user-bubble > div { max-width: 94%; }
 }
+.metrics-note { color: #8a9489; font-size: 11px; margin-right: auto; }
+.qa-topbutton:disabled { opacity: .55; cursor: default; }

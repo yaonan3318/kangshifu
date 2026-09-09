@@ -82,7 +82,7 @@ class AnswerStatusResponse(BaseModel):
 
 class AnswerEvent(BaseModel):
     type: Literal[
-        "stage", "sources", "delta", "replace", "warning", "done", "error",
+        "stage", "sources", "delta", "replace", "warning", "metrics", "done", "error",
         "harness_started", "tool_requested", "tool_running", "tool_result",
         "approval_required", "approval_result", "harness_done",
     ]
@@ -91,6 +91,7 @@ class AnswerEvent(BaseModel):
     text: str | None = None
     sources: list[AnswerSource] | None = None
     warning: AnswerWarning | None = None
+    metrics: dict[str, Any] | None = None
     scope: KnowledgeScope | None = None
     deepseek_requested: bool | None = None
     deepseek_used: bool | None = None

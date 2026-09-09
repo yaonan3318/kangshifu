@@ -4,6 +4,7 @@
 区别是 Uvicorn 启动后会让应用常驻进程，而不是每个 HTTP 请求都重新执行本文件。
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -23,6 +24,7 @@ from app.api.retrieval_lab import router as retrieval_lab_router
 from app.api.chat import router as chat_router
 from app.config import Settings, get_settings
 from app.errors import AppError
+from app.llm.ollama import OllamaClient
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +35,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        """应用启动时准备本地目录，关闭时预留统一清理入口。"""
+        """应用启动时准备本地目录，并可选在后台预热 Ollama 模型。"""
         active_settings.ensure_directories()
-        yield
+
+        if active_settings.ollama_warmup_enabled:
+            async def warmup_after_start():
+                await asyncio.sleep(0.6)
+                try:
+                    if await OllamaClient(active_settings).warmup():
+                        logger.info("Local model warmup finished")
+                except Exception:
+                    logger.info("Local model warmup skipped (Ollama not ready)")
+
+            task = asyncio.create_task(warmup_after_start())
+            yield
+            task.cancel()
+        else:
+            yield
 
     app = FastAPI(title="Company Search", version="0.1.0", lifespan=lifespan)
     app.state.settings = active_settings

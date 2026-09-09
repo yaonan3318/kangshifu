@@ -9,6 +9,13 @@ export async function getAnswerStatus(): Promise<AnswerStatus> {
   throw new ApiError(body.error?.code ?? 'STATUS_FAILED', body.error?.message ?? '无法读取问答服务状态')
 }
 
+export async function warmUpAnswer(): Promise<{ warmed: boolean; message: string }> {
+  const response = await fetch('/api/answer/warmup', { method: 'POST' })
+  if (response.ok) return response.json()
+  const body = (await response.json().catch(() => ({}))) as ApiErrorBody
+  throw new ApiError(body.error?.code ?? 'WARMUP_FAILED', body.error?.message ?? '模型预热失败')
+}
+
 export interface StreamAnswerInput {
   question: string
   sessionId?: string

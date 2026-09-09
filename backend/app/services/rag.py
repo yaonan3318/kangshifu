@@ -1,11 +1,22 @@
-"""RAG 编排层：检索证据、构造提示词、调用千问，并可选调用 DeepSeek 增强。"""
+"""RAG 编排层：检索证据、构造提示词、调用千问，并可选调用 DeepSeek 增强。
 
+同时负责：
+- 记录每次问答各阶段耗时与 token 数（answer/stream 把 metrics 持久化到 chat_messages）
+- 相同问题、资料版本与检索配置未变化时命中内存缓存，避免重复检索与生成
+- 上下文裁剪限制片段数量，保证本地模型在 Mac M3 Pro 上可用
+"""
+
+from collections import OrderedDict
 from collections.abc import AsyncIterator
+from time import perf_counter
+import uuid
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.llm import DeepSeekClient, GenerationMessage, LlmError, OllamaClient
+from app.models import Document, DocumentChunk, DocumentStatus
 from app.schemas.answer import (
     AnswerEvent, AnswerProvider, AnswerRequest, AnswerSource, AnswerStatusResponse,
     AnswerWarning, KnowledgeScope,
@@ -14,6 +25,13 @@ from app.schemas.search import SearchRequest, SearchResult
 from app.services.search import SearchService
 
 NO_INTERNAL_ANSWER = "公司资料库中没有找到能够回答这个问题的内部资料。"
+
+# 简单进程内回答缓存（FIFO）；键包含资料版本指纹，资料变更会自动失效。
+_answer_cache: OrderedDict[str, dict] = OrderedDict()
+
+
+def _seconds_since(started: float) -> float:
+    return round((perf_counter() - started) * 1000, 2)
 
 
 class RagService:
@@ -34,21 +52,69 @@ class RagService:
         )
 
     async def stream(self, request: AnswerRequest) -> AsyncIterator[AnswerEvent]:
-        """逐阶段产生 SSE 事件；DeepSeek 失败时保留已生成的本地答案。"""
+        """逐阶段产生 SSE 事件；DeepSeek 失败时保留已生成的本地答案。
+
+        事件顺序：
+        stage(retrieving) -> sources -> [stage(local_generating) + deltas]
+        -> [warning/stage(deepseek_enhancing) + deltas] -> metrics -> done
+        """
+        cache_key: str | None = None
+        if self._cache_eligible(request):
+            cache_key = self._cache_key(request)
+            hit = _answer_cache.get(cache_key)
+            if hit is not None:
+                _answer_cache.move_to_end(cache_key)
+                yield AnswerEvent(type="stage", stage="retrieving")
+                yield AnswerEvent(type="sources", sources=hit["sources"])
+                answer_text = hit["answer"] or NO_INTERNAL_ANSWER
+                yield AnswerEvent(type="delta", provider=hit["provider"], text=answer_text)
+                yield AnswerEvent(type="metrics", metrics={**hit["metrics"], "cache_hit": True})
+                yield AnswerEvent(
+                    type="done", provider=hit["provider"], scope=hit["scope"],
+                    deepseek_requested=False, deepseek_used=False,
+                    source_count=len(hit["sources"]),
+                )
+                return
+
+        started = perf_counter()
         yield AnswerEvent(type="stage", stage="retrieving")
-        results = self.search_service.search(self._search_request(request))
+        outcome = self.search_service.search_with_diagnostics(self._search_request(request))
+        results = outcome.items
         sources = self._sources(results)
         yield AnswerEvent(type="sources", sources=sources)
         scope = self._internal_scope(results)
+
+        stage_timings = outcome.diagnostics.timings_ms
+        local_stats: dict = {"first_token_ms": None, "generation_ms": None, "prompt_tokens": None, "completion_tokens": None}
+        deepseek_stats: dict = {"first_token_ms": None, "generation_ms": None, "prompt_tokens": None, "completion_tokens": None}
 
         local_answer = ""
         # 无内部证据时禁止千问凭训练知识冒充公司资料回答。
         if sources:
             yield AnswerEvent(type="stage", stage="local_generating")
             try:
-                async for delta in self.ollama.stream(self._local_messages(request, sources, scope)):
+                generation_started = perf_counter()
+                first_token: float | None = None
+                prompt_tokens: int | None = None
+                completion_tokens: int = 0
+                async for item in self.ollama.stream_with_stats(self._local_messages(request, sources, scope)):
+                    if item.get("prompt_eval_count") is not None:
+                        prompt_tokens = int(item["prompt_eval_count"])
+                    if item.get("eval_count") is not None:
+                        completion_tokens = int(item["eval_count"])
+                    delta = item.get("delta") or ""
+                    if not delta:
+                        continue
+                    if first_token is None:
+                        first_token = perf_counter() - generation_started
                     local_answer += delta
                     yield AnswerEvent(type="delta", provider=AnswerProvider.LOCAL, text=delta)
+                local_stats = {
+                    "first_token_ms": _seconds_since(generation_started) if first_token is None else round(first_token * 1000, 2),
+                    "generation_ms": _seconds_since(generation_started),
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                }
             except LlmError as exc:
                 yield AnswerEvent(type="error", error={"code": exc.code, "message": exc.message})
                 return
@@ -72,12 +138,23 @@ class RagService:
                 yield AnswerEvent(type="stage", stage="deepseek_enhancing")
                 enhanced_parts: list[str] = []
                 try:
+                    ds_started = perf_counter()
+                    ds_first: float | None = None
                     async for delta in self.deepseek.stream(self._deepseek_messages(request, sources, local_answer)):
+                        if ds_first is None:
+                            ds_first = perf_counter() - ds_started
                         enhanced_parts.append(delta)
+                    combined = "".join(enhanced_parts)
+                    deepseek_stats = {
+                        "first_token_ms": None if ds_first is None else round(ds_first * 1000, 2),
+                        "generation_ms": _seconds_since(ds_started),
+                        "prompt_tokens": None,
+                        "completion_tokens": self._estimate_tokens(combined),
+                    }
                 except LlmError as exc:
                     yield AnswerEvent(type="warning", warning=AnswerWarning(code=exc.code, message=exc.message))
                 else:
-                    enhanced = "".join(enhanced_parts).strip()
+                    enhanced = combined.strip()
                     if enhanced:
                         provider = AnswerProvider.DEEPSEEK
                         deepseek_used = True
@@ -85,11 +162,85 @@ class RagService:
                         yield AnswerEvent(type="replace", provider=provider, text="")
                         yield AnswerEvent(type="delta", provider=provider, text=enhanced)
 
+        final_text = local_answer
+        if deepseek_used and enhanced:
+            final_text = enhanced
+        metrics = {
+            "query_processing_ms": stage_timings.get("query_processing"),
+            "keyword_search_ms": stage_timings.get("keyword"),
+            "vector_search_ms": stage_timings.get("vector"),
+            "rerank_ms": stage_timings.get("rerank"),
+            "retrieval_ms": stage_timings.get("total"),
+            "llm_first_token_ms": (deepseek_stats if deepseek_used else local_stats).get("first_token_ms"),
+            "llm_generation_ms": (deepseek_stats if deepseek_used else local_stats).get("generation_ms"),
+            "prompt_tokens": (deepseek_stats if deepseek_used else local_stats).get("prompt_tokens"),
+            "completion_tokens": (deepseek_stats if deepseek_used else local_stats).get("completion_tokens"),
+            "total_ms": _seconds_since(started),
+            "source_count": len(sources),
+            "provider": provider.value,
+            "cache_hit": False,
+        }
+        if cache_key is not None:
+            self._store_cache(cache_key, final_text, provider, scope, sources, metrics)
+
+        yield AnswerEvent(type="metrics", metrics=metrics)
         yield AnswerEvent(
             type="done", provider=provider, scope=scope,
             deepseek_requested=request.use_deepseek, deepseek_used=deepseek_used,
             source_count=len(sources),
         )
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """没有官方 tokenizer 时的估算：中文近似 1 字 1 token，其余按字符 4 分之 1。"""
+        cjk = sum(1 for char in text if "\u4e00" <= char <= "\u9fff")
+        return int(cjk + (len(text) - cjk) / 4) or 1
+
+    def _cache_eligible(self, request: AnswerRequest) -> bool:
+        return bool(
+            self.settings.answer_cache_enabled and request.question.strip()
+            and not request.use_deepseek and not request.use_harness
+            and not request.regenerate_message_id
+        )
+
+    def _cache_key(self, request: AnswerRequest) -> str:
+        parts = [
+            request.question.strip(),
+            str(request.knowledge_base_id or ""),
+            str(request.extension or ""),
+            str(self.settings.rag_source_limit),
+            str(self.settings.rag_max_context_chars),
+            self.settings.ollama_model,
+            self._version_fingerprint(request),
+        ]
+        return uuid.uuid5(uuid.NAMESPACE_URL, "|".join(parts)).hex
+
+    def _version_fingerprint(self, request: AnswerRequest) -> str:
+        """资料内容/状态指纹：停用、删除、编辑、重建索引都会改变指纹并让缓存失效。"""
+        base = [Document.status == DocumentStatus.READY, Document.enabled.is_(True), Document.deleted_at.is_(None)]
+        if request.knowledge_base_id:
+            base.append(Document.knowledge_base_id == request.knowledge_base_id)
+        document = self.search_service.session.execute(
+            select(func.count(Document.id), func.max(Document.updated_at)).where(*base)
+        ).one()
+        chunk = self.search_service.session.execute(
+            select(func.count(DocumentChunk.id), func.max(DocumentChunk.updated_at))
+            .join(Document, DocumentChunk.document_id == Document.id)
+            .where(*base, DocumentChunk.enabled.is_(True))
+        ).one()
+        return f"d{document[0]}:{document[1] or ''}|c{chunk[0]}:{chunk[1] or ''}"
+
+    def _store_cache(
+        self, key: str, answer: str, provider: AnswerProvider, scope: KnowledgeScope,
+        sources: list[AnswerSource], metrics: dict,
+    ) -> None:
+        _answer_cache[key] = {
+            "answer": answer, "provider": provider, "scope": scope,
+            "sources": sources, "metrics": metrics,
+        }
+        _answer_cache.move_to_end(key)
+        while len(_answer_cache) > self.settings.answer_cache_size:
+            _answer_cache.popitem(last=False)
 
     def _search_request(self, request: AnswerRequest) -> SearchRequest:
         return SearchRequest(

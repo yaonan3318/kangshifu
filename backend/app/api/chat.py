@@ -38,6 +38,7 @@ def _message_payload(message: ChatMessage, service: ChatService) -> ChatMessageO
         knowledge_scope=message.knowledge_scope, status=message.status,
         error_code=message.error_code, error_message=message.error_message,
         created_at=message.created_at, completed_at=message.completed_at,
+        metrics=message.metrics or {},
         sources=[_source_payload(source, service) for source in message.sources],
     )
 

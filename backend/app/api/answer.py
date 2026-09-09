@@ -50,6 +50,13 @@ async def answer_status(service: Annotated[RagService, Depends(get_rag_service)]
     return await service.status()
 
 
+@router.post("/warmup")
+async def answer_warmup(service: Annotated[RagService, Depends(get_rag_service)]) -> dict:
+    """预热本地模型：把模型加载进驻留内存，显著加快首次问答。"""
+    warmed = await service.ollama.warmup()
+    return {"warmed": warmed, "message": "本地模型已预热" if warmed else "预热失败，请检查 Ollama"}
+
+
 @router.post("/stream")
 async def answer_stream(
     body: AnswerRequest,
@@ -82,19 +89,28 @@ async def answer_stream(
         is_harness = body.use_harness
         text_parts: list[str] = []
         sources: list = []
+        metrics_payload: dict | None = None
         finalized = False
+        disconnected = False
+        stream = (
+            HarnessService(service.search_service.session, service.settings).start(body)
+            if is_harness
+            else service.stream(body)
+        )
         try:
-            stream = (
-                HarnessService(service.search_service.session, service.settings).start(body)
-                if is_harness
-                else service.stream(body)
-            )
-            async for event in stream:
+            while True:
+                try:
+                    event = await stream.__anext__()
+                except StopAsyncIteration:
+                    break
                 # 客户端关闭页面后尽快停止生成，避免模型继续占用计算资源。
                 if await request.is_disconnected():
+                    disconnected = True
                     break
                 if event.type == "sources" and event.sources is not None:
                     sources = event.sources
+                elif event.type == "metrics" and event.metrics is not None:
+                    metrics_payload = event.metrics
                 elif event.type == "replace":
                     text_parts.clear()
                 elif event.type == "delta" and event.text:
@@ -106,11 +122,12 @@ async def answer_stream(
                         _provider_value(event),
                         event.scope.value if event.scope is not None else None,
                         sources,
+                        metrics=metrics_payload,
                     )
                     finalized = True
                 elif event.type == "harness_done":
                     content = "".join(text_parts)
-                    recorder.complete(content, ChatProvider.HARNESS, "INTERNAL", sources)
+                    recorder.complete(content, ChatProvider.HARNESS, "INTERNAL", sources, metrics=metrics_payload)
                     finalized = True
                 elif event.type == "error" and event.error:
                     recorder.mark_failed(
@@ -129,6 +146,11 @@ async def answer_stream(
         finally:
             if not finalized:
                 recorder.mark_stopped("".join(text_parts))
+            if disconnected or not finalized:
+                try:
+                    await stream.aclose()
+                except (RuntimeError, asyncio.CancelledError):
+                    pass
 
     return StreamingResponse(
         events(), media_type="text/event-stream",

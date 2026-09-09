@@ -42,6 +42,7 @@ export interface ChatMessageRecord {
   error_message: string | null
   created_at: string
   completed_at: string | null
+  metrics?: Record<string, unknown>
   sources: ChatSourceSnapshot[]
 }
 

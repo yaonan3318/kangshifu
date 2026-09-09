@@ -221,10 +221,12 @@ class AnswerRecorder:
     def mark_failed(self, content: str, code: str, message: str) -> ChatMessage:
         return self._finish(content, ChatMessageStatus.FAILED, code=code, message=message)
 
-    def complete(self, content: str, provider: ChatProvider, scope: str | None, sources: list[AnswerSource]) -> ChatMessage:
+    def complete(self, content: str, provider: ChatProvider, scope: str | None, sources: list[AnswerSource], metrics: dict | None = None) -> ChatMessage:
         self._finish(content, ChatMessageStatus.COMPLETED, provider=provider)
         if self.assistant is not None:
             self.assistant.knowledge_scope = scope
+            if metrics:
+                self.assistant.metrics = metrics
             for source in sources:
                 self.session.add(ChatMessageSource(
                     message_id=self.assistant.id,

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ApiError } from '../../api/documents'
-import { getAnswerStatus, streamAnswer } from '../../api/answer'
-import type { AnswerEvent, AnswerSource, AnswerStatus, AnswerTurn, CitationSource } from '../../types/answer'
+import { getAnswerStatus, streamAnswer, warmUpAnswer } from '../../api/answer'
+import type { AnswerEvent, AnswerMetrics, AnswerSource, AnswerStatus, AnswerTurn, CitationSource } from '../../types/answer'
 import { listKnowledgeBases } from '../../api/knowledgeBases'
 import type { KnowledgeBaseRecord } from '../../types/knowledgeBases'
 import { getHarnessStatus, getNamespaces, confirmApproval, getHarnessTask, rejectApproval, resumeHarness } from '../../api/harness'
@@ -51,6 +51,8 @@ const scrollPane = ref<HTMLElement | null>(null)
 const composerInput = ref<HTMLTextAreaElement | null>(null)
 
 const selectedCitation = ref<CitationSource | null>(null)
+const warmed = ref(false)
+const warming = ref(false)
 let searchTimer: number | undefined
 
 const activeTurns = computed(() => (activeSessionId.value ? sessionCache[activeSessionId.value] ?? [] : []))
@@ -76,8 +78,24 @@ async function loadStatus() {
     harnessStatus.value = await getHarnessStatus()
     if (!selectedContext.value && harnessStatus.value.contexts.length) selectedContext.value = harnessStatus.value.contexts[0]
     statusError.value = ''
+    if (ollamaReady.value && !warmed.value) {
+      warmed.value = true
+      void warmUpModel(false)
+    }
   } catch (reason) {
     statusError.value = reason instanceof ApiError ? reason.message : '无法检查本地模型状态'
+  }
+}
+
+async function warmUpModel(manual: boolean) {
+  if (warming.value) return
+  warming.value = true
+  try {
+    await warmUpAnswer()
+  } catch {
+    if (manual) statusError.value = '本地模型预热失败，请确认 Ollama 已启动'
+  } finally {
+    warming.value = false
   }
 }
 
@@ -207,6 +225,7 @@ function turnFromHistory(messages: ChatMessageRecord[]): AnswerTurn[] {
       turn.answer = message.content || ''
       turn.provider = message.provider ?? 'LOCAL'
       turn.scope = message.knowledge_scope as AnswerTurn['scope']
+      turn.metrics = (message.metrics ?? {}) as AnswerMetrics
       turn.sources = message.sources.map(dbSourceToUi)
       if (message.status === 'FAILED') {
         turn.failed = true
@@ -486,6 +505,7 @@ function handleAnswerEvent(turn: AnswerTurn, event: AnswerEvent) {
   handleHarnessEvent(turn, event)
   if (event.type === 'stage') turn.stage = event.stage ?? null
   if (event.type === 'sources') turn.sources = (event.sources ?? []).map(sseSourceToUi)
+  if (event.type === 'metrics' && event.metrics) turn.metrics = event.metrics
   if (event.type === 'replace') { turn.answer = ''; turn.provider = event.provider ?? 'DEEPSEEK' }
   if (event.type === 'delta') { turn.answer += event.text ?? ''; if (event.provider) turn.provider = event.provider }
   if (event.type === 'warning' && event.warning) turn.warnings.push(event.warning)
@@ -611,6 +631,23 @@ function copyAnswer(turn: AnswerTurn) {
   void navigator.clipboard.writeText(turn.answer)
 }
 
+function formatMs(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-'
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}s`
+  return `${Math.round(value)}ms`
+}
+
+function latencySummary(turn: AnswerTurn): string {
+  const metrics = turn.metrics
+  if (!metrics) return ''
+  const parts = [
+    `首字 ${formatMs(metrics.llm_first_token_ms ?? null)}`,
+    `回答 ${formatMs(metrics.total_ms ?? null)}`,
+  ]
+  if (metrics.cache_hit) parts.push('缓存命中')
+  return parts.join(' · ')
+}
+
 async function scrollToBottom(smooth: boolean) {
   await nextTick()
   const pane = scrollPane.value
@@ -721,6 +758,7 @@ onBeforeUnmount(() => {
             {{ ollamaReady ? '千问已就绪' : '本地模型未就绪' }}
           </span>
           <span class="qa-chip" :class="status?.deepseek_configured ? 'is-ready' : ''">DeepSeek {{ status?.deepseek_configured ? '可用' : '关闭' }}</span>
+          <button v-if="ollamaReady" type="button" class="qa-topbutton" :disabled="warming" @click="warmUpModel(true)">{{ warming ? '预热中…' : '预热模型' }}</button>
           <button type="button" class="qa-topbutton" @click="loadStatus">重新检查</button>
         </div>
       </header>
@@ -804,6 +842,7 @@ onBeforeUnmount(() => {
             <HarnessApproval v-if="turn.approval" :approval="turn.approval" :busy="approvalBusy" @confirm="decideApproval(turn, $event)" @reject="decideApproval(turn, null)" />
 
             <footer v-if="turn.answer || turn.sources.length" class="answer-card-foot">
+              <span v-if="turn.answer && turn.metrics && latencySummary(turn)" class="metrics-note">{{ latencySummary(turn) }}</span>
               <span v-if="turn.sources.length" class="source-toggle" @click="turn.sourcesVisible = !turn.sourcesVisible">
                 {{ turn.sourcesVisible ? '收起引用' : `查看 ${turn.sources.length} 条引用` }}
               </span>
