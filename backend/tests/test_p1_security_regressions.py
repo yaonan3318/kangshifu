@@ -179,6 +179,21 @@ class P1SecurityRegressionTests(unittest.TestCase):
         self.assertIn('class="assistant-admin-layout"', assistant_page)
         self.assertIn('class="assistant-editor-backdrop"', assistant_page)
 
+    def test_navigation_state_is_restored_per_user(self) -> None:
+        app = source("frontend/src/App.vue")
+        system_admin = source("frontend/src/features/admin/SystemAdmin.vue")
+        self.assertIn("company-search:last-page:", appocha := app)
+        self.assertIn("restorePageForUser", appocha)
+        self.assertIn("isPageAllowed", appocha)
+        self.assertIn("company-search:last-system-tab:", system_admin)
+
+    def test_user_form_error_is_rendered_inside_drawer(self) -> None:
+        user_page = source("frontend/src/features/admin/UserAdmin.vue")
+        backdrop_at = user_page.index('class="user-editor-backdrop"')
+        drawer_error_at = user_page.index('v-if="error" class="error"', backdrop_at)
+        form_at = user_page.index('class="assistant-form"', backdrop_at)
+        self.assertLess(drawer_error_at, form_at)
+
 
 if __name__ == "__main__":
     unittest.main()

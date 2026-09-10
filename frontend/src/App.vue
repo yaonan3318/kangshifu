@@ -9,6 +9,7 @@ import LoginPanel from './components/LoginPanel.vue'
 import { getAuthState, logoutRequest, type AuthUser } from './api/auth'
 
 type PageKey = 'answer' | 'search' | 'library' | 'lab' | 'system'
+const LAST_PAGE_PREFIX = 'company-search:last-page:'
 
 const page = ref<PageKey>('answer')
 const currentUser = ref<AuthUser | null>(null)
@@ -40,11 +41,25 @@ const navItems = computed(() => {
   return items
 })
 
+function isPageAllowed(target: PageKey, user: AuthUser | null = currentUser.value): boolean {
+  if (!(target in pages)) return false
+  return !['lab', 'system'].includes(target) || Boolean(user?.is_super_admin)
+}
+
+function restorePageForUser(user: AuthUser | null) {
+  if (!user) {
+    page.value = 'answer'
+    return
+  }
+  const stored = window.localStorage.getItem(`${LAST_PAGE_PREFIX}${user.id}`) as PageKey | null
+  page.value = stored && isPageAllowed(stored, user) ? stored : 'answer'
+}
+
 provide('currentUser', currentUser)
 
 function onSwitchPage(event: Event) {
   const target = (event as CustomEvent<string>).detail
-  if (target in pages) page.value = target as PageKey
+  if (target in pages && isPageAllowed(target as PageKey)) page.value = target as PageKey
 }
 
 function onAuthExpired() {
@@ -56,8 +71,10 @@ async function boot() {
   try {
     const state = await getAuthState()
     currentUser.value = state.user
+    restorePageForUser(state.user)
   } catch {
     currentUser.value = null
+    page.value = 'answer'
   } finally {
     checking.value = false
   }
@@ -79,6 +96,12 @@ async function handleLogout() {
 
 watch(currentUser, (user) => {
   if (user) sessionStarted.value = true
+})
+watch(page, (value) => {
+  const user = currentUser.value
+  if (user && isPageAllowed(value, user)) {
+    window.localStorage.setItem(`${LAST_PAGE_PREFIX}${user.id}`, value)
+  }
 })
 
 onMounted(() => {

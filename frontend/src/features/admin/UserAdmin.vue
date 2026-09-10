@@ -215,7 +215,7 @@ onMounted(async () => {
       <h1>用户管理</h1>
       <p>维护本地账号、所属部门与角色。停用用户会立即撤销其全部登录会话。</p>
     </header>
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="error && !editorOpen" class="error">{{ error }}</p>
     <p v-if="notice" class="assistant-hint">{{ notice }}</p>
 
     <div class="user-admin-layout">
@@ -277,6 +277,7 @@ onMounted(async () => {
           <div><p class="eyebrow">EDITOR</p><h2>{{ editing ? '编辑用户' : '新建用户' }}</h2></div>
           <button type="button" class="close-button" aria-label="关闭" @click="closeEditor">×</button>
         </div>
+        <p v-if="error" class="error">{{ error }}</p>
         <form class="assistant-form" @submit.prevent="save">
           <div class="two-col">
             <label class="form-row">用户名<input v-model="form.username" :disabled="editing" maxlength="255" placeholder="登录名（创建后不可修改）"></label>
