@@ -38,6 +38,7 @@ from app.errors import AppError
 from app.llm.ollama import OllamaClient
 from app.models import User
 from app.services.auth import bootstrap, find_by_token
+from app.services.audit import record as audit_record
 
 logger = logging.getLogger(__name__)
 
@@ -118,8 +119,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return await call_next(request)
 
     @app.exception_handler(AppError)
-    async def app_error_handler(_: Request, exc: AppError) -> JSONResponse:
+    async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
         """把可预期的业务异常统一转换成前端可识别的 JSON 结构。"""
+        if exc.code in ("ADMIN_REQUIRED", "HARNESS_FORBIDDEN"):
+            audit_record(
+                None, "authorization_denied",
+                user=getattr(request.state, "auth_user", None),
+                target_type="api",
+                detail={"method": request.method, "path": request.url.path},
+                ip_address=request.client.host if request.client else None,
+                success=False, error_code=exc.code,
+                request_id=request.headers.get("X-Request-ID"),
+            )
         return JSONResponse(
             status_code=exc.status_code,
             content={"error": {"code": exc.code, "message": exc.message, "details": exc.details}},

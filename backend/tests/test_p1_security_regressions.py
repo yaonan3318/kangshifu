@@ -90,6 +90,19 @@ class P1SecurityRegressionTests(unittest.TestCase):
         self.assertIn("success", audit)
         self.assertIn("request_id", audit)
 
+    def test_harness_audit_wraps_stream_iteration(self) -> None:
+        harness = source("backend/app/api/harness.py")
+        self.assertIn("async def _audited_stream", harness)
+        self.assertIn("async for event in stream", harness)
+        self.assertIn('"harness_completed"', harness)
+        self.assertIn('"harness_failed"', harness)
+
+    def test_admin_denials_are_audited_globally(self) -> None:
+        main = source("backend/app/main.py")
+        self.assertIn('exc.code in ("ADMIN_REQUIRED", "HARNESS_FORBIDDEN")', main)
+        self.assertIn('"authorization_denied"', main)
+        self.assertIn('success=False', main)
+
     def test_feedback_ranking_is_default_off_and_capped(self) -> None:
         config = source("backend/app/config.py")
         self.assertIn("search_feedback_ranking_enabled: bool = False", config)

@@ -13,7 +13,7 @@ from app.config import Settings, get_settings
 from app.db import get_session
 from app.harness.kubernetes import KubectlClient
 from app.schemas.harness import ApprovalConfirmRequest, ApprovalRejectRequest, HarnessApprovalResponse, HarnessStatusResponse, HarnessTaskResponse
-from app.services.audit import audit_action
+from app.services.audit import audit_action, record as audit_record
 from app.services.harness import HarnessService
 from app.services.harness_approvals import ApprovalService
 from app.services.permissions import require_admin
@@ -26,6 +26,30 @@ def _meta(request: Request) -> dict:
         "ip_address": request.client.host if request.client else None,
         "request_id": request.headers.get("X-Request-ID"),
     }
+
+
+async def _audited_stream(stream, *, user, task_id: uuid.UUID, use_deepseek: bool, meta: dict):
+    """在实际消费 Harness 异步流期间记录开始、完成和失败。"""
+    detail = {"use_deepseek": use_deepseek}
+    audit_record(
+        None, "harness_started", user=user, target_type="harness_task",
+        target_id=task_id, detail=detail, **meta,
+    )
+    try:
+        async for event in stream:
+            yield encode_sse(event)
+    except Exception as exc:
+        audit_record(
+            None, "harness_failed", user=user, target_type="harness_task",
+            target_id=task_id, detail=detail, success=False,
+            error_code=getattr(exc, "code", "INTERNAL_ERROR"), **meta,
+        )
+        raise
+    else:
+        audit_record(
+            None, "harness_completed", user=user, target_type="harness_task",
+            target_id=task_id, detail=detail, **meta,
+        )
 
 
 @router.get("/status", response_model=HarnessStatusResponse)
@@ -52,12 +76,11 @@ def task(task_id: uuid.UUID, request: Request, session: Annotated[Session, Depen
 def resume(task_id: uuid.UUID, request: Request, session: Annotated[Session, Depends(get_session)], settings: Annotated[Settings, Depends(get_settings)], use_deepseek: bool = False) -> StreamingResponse:
     admin = require_admin(current_user(request))
     service = HarnessService(session, settings, user=admin)
-    with audit_action(
-        session, "harness_started", user=admin, target_type="harness_task", target_id=task_id,
-        detail={"use_deepseek": use_deepseek}, **_meta(request),
-    ):
-        stream = service.resume(task_id, use_deepseek)
-    return StreamingResponse((encode_sse(event) async for event in stream), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    stream = _audited_stream(
+        service.resume(task_id, use_deepseek), user=admin, task_id=task_id,
+        use_deepseek=use_deepseek, meta=_meta(request),
+    )
+    return StreamingResponse(stream, media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @router.post("/approvals/{approval_id}/confirm", response_model=HarnessApprovalResponse)
