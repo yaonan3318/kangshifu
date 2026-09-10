@@ -96,18 +96,25 @@ onUnmounted(() => {
   <div v-if="checking" class="login-boot">正在连接本地服务…</div>
   <template v-else>
     <div v-if="currentUser || sessionStarted" v-show="!!currentUser" class="app-root">
-      <nav class="top-nav" aria-label="主导航">
-        <button
-          v-for="item in navItems"
-          :key="item.key"
-          :class="{ active: page === item.key }"
-          @click="page = item.key"
-        >{{ item.label }}</button>
-      </nav>
-      <div class="top-user">
-        <span class="user-chip">{{ currentUser?.display_name }}<em v-if="currentUser?.is_super_admin">管理员</em></span>
-        <button type="button" class="logout-button" @click="handleLogout">退出登录</button>
-      </div>
+      <header class="app-header">
+        <button type="button" class="app-brand" aria-label="返回知识问答" @click="page = 'answer'">
+          <span class="app-brand-mark">康</span>
+          <span><strong>康师傅知识助手</strong><small>企业知识工作台</small></span>
+        </button>
+        <nav class="top-nav" aria-label="主导航">
+          <button
+            v-for="item in navItems"
+            :key="item.key"
+            :class="{ active: page === item.key }"
+            @click="page = item.key"
+          >{{ item.label }}</button>
+        </nav>
+        <div class="top-user">
+          <span class="user-avatar-chip">{{ currentUser?.display_name?.slice(0, 1) || '用' }}</span>
+          <span class="user-chip">{{ currentUser?.display_name }}<em v-if="currentUser?.is_super_admin">管理员</em></span>
+          <button type="button" class="logout-button" @click="handleLogout">退出</button>
+        </div>
+      </header>
       <KeepAlive>
         <component :is="activePage" />
       </KeepAlive>
