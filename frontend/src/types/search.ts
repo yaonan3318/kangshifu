@@ -23,10 +23,26 @@ export interface SearchResult {
   final_score: number
   base_score?: number | null
   feedback_boost?: number
+  pre_rerank_rank?: number | null
+  post_rerank_rank?: number | null
+}
+
+export interface QueryRewriteInfo {
+  original: string
+  standalone_question: string
+  retrieval_query: string
+  queries: string[]
+  used_context: boolean
+  rewritten: boolean
+  warning: string | null
 }
 
 export interface RetrievalStageItem { chunk_id:string;document_id:string;document_name:string;sequence_number:number;score:number;content_preview:string }
-export interface SearchDiagnostics { normalized_query:string;expanded_terms:string[];mode:string;warning:string|null;no_answer_reason:string|null;timings_ms:Record<string,number>;stages:Record<string,RetrievalStageItem[]> }
+export interface SearchDiagnostics {
+  normalized_query:string;expanded_terms:string[];mode:string;warning:string|null;no_answer_reason:string|null;
+  timings_ms:Record<string,number>;stages:Record<string,RetrievalStageItem[]>;
+  queries?:string[];retrieval_query?:string|null;rerank_applied?:boolean;
+}
 
 export interface SearchResponse {
   query: string

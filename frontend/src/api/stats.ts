@@ -29,8 +29,25 @@ export interface StatsOverview {
   backlog: number
 }
 
+export interface DashboardStats {
+  knowledge_base_count: number
+  document_count: number
+  chunk_count: number
+  questions_today: number
+  answers_30d: number
+  avg_response_ms: number | null
+  citation_coverage: number | null
+  satisfaction: number | null
+  feedback: { total: number; up: number; down: number }
+  hot_questions: Array<{ question: string; count: number }>
+  knowledge_gap_count: number
+}
+
 export const getStatsOverview = async (days = 7): Promise<StatsOverview> =>
   parse(await fetch(`/api/stats/overview?days=${days}`))
+
+export const getDashboard = async (): Promise<DashboardStats> =>
+  parse(await fetch('/api/stats/dashboard'))
 
 export const getAnswerTrace = async (messageId: string): Promise<Record<string, unknown>> =>
   parse(await fetch(`/api/stats/trace/${messageId}`))

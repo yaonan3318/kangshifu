@@ -15,7 +15,10 @@ from app.models import (
     DocumentStatus, DocumentVisibility, JobStatus, JobType, KnowledgeBase, ProcessingJob, Role,
     SubjectType, Tag, User,
 )
+from app.ocr import TesseractOcrEngine
+from app.parsers import ParserRegistry
 from app.schemas.documents import DocumentFilters, DocumentUpdateRequest
+from app.services.chunking import ChunkingConfig, chunk_blocks
 from app.services.file_types import detect_allowed_type
 from app.services.managed_storage import ManagedStorage
 from app.services.permissions import PermissionResolver, require_manage, require_read
@@ -188,9 +191,38 @@ class DocumentService:
         if body.tags is not None:
             names = list(dict.fromkeys(name.strip() for name in body.tags if name.strip()))
             document.tags = [self._tag(document.knowledge_base_id, name) for name in names]
+        # P2-6：作者/部门/主题/关联文档/有效期，为知识图谱与实体关系检索保留数据。
+        if "author" in body.model_fields_set:
+            document.author = body.author.strip() if body.author else None
+        if "department_id" in body.model_fields_set:
+            if body.department_id is not None and self.session.get(Department, body.department_id) is None:
+                raise AppError("DEPARTMENT_NOT_FOUND", "部门不存在", 404)
+            document.department_id = body.department_id
+        if "topic" in body.model_fields_set:
+            document.topic = body.topic.strip() if body.topic else None
+        if body.related_document_ids is not None:
+            document.related_document_ids = [str(item) for item in body.related_document_ids]
+        if "valid_from" in body.model_fields_set:
+            document.valid_from = body.valid_from
+        if "valid_until" in body.model_fields_set:
+            document.valid_until = body.valid_until
         self.session.commit()
         self.session.refresh(document)
         return self.get(document.id)
+
+    def preview_chunks(
+        self, document_id: uuid.UUID, config_override: dict | None = None, limit: int = 50,
+    ) -> tuple[list, int, ChunkingConfig]:
+        """解析文档并按切片策略预览结果，不写入数据库。"""
+        document = self.get(document_id)
+        self._check_manage(document)
+        parser = ParserRegistry(TesseractOcrEngine()).get(document.extension)
+        blocks = parser.parse(self.storage.resolve(document.stored_path))
+        knowledge_base = self.session.get(KnowledgeBase, document.knowledge_base_id)
+        base = ChunkingConfig.from_dict(knowledge_base.chunking_config if knowledge_base else None)
+        config = ChunkingConfig.from_dict(config_override) if config_override else base
+        chunks = chunk_blocks(blocks, config)
+        return chunks[:limit], len(chunks), config
 
     def versions(self, document_id: uuid.UUID) -> list[Document]:
         """返回版本链；入口要求可读，链上每个版本再按当前用户重新鉴权。

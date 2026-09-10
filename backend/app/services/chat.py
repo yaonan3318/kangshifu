@@ -12,6 +12,7 @@ from app.models import (
     ChatSession, Document, DocumentChunk, DocumentStatus, KnowledgeBase,
 )
 from app.schemas.answer import AnswerEvent, AnswerSource
+from app.services.keywords import keyword_text
 from app.services.permissions import PermissionResolver
 
 DEFAULT_TITLE = "新会话"
@@ -126,6 +127,7 @@ class ChatService:
         资料删除/停用但仍有权限时，返回快照并标记状态。
         """
         document, chunk, kb = self._current_state(source.document_id, source.chunk_id)
+        matched_keywords = self._matched_keywords(source.message_id, source.content_snapshot)
         base = {
             "id": source.id,
             "citation_number": source.citation_number,
@@ -134,20 +136,44 @@ class ChatService:
             "document_name": source.document_name,
             "location_snapshot": source.location_snapshot,
             "score": source.score,
+            "extension": document.extension if document is not None else None,
+            "version_number": document.version_number if document is not None else None,
+            "matched_keywords": matched_keywords,
         }
         if self.user is None or document is None:
-            return {**base, "content_snapshot": None, "available": False, "status": "FORBIDDEN", "message": "当前无权查看该引用"}
+            return {**base, "content_snapshot": None, "available": False, "can_download": False, "status": "FORBIDDEN", "message": "当前无权查看该引用"}
         resolver = PermissionResolver(self.session, self.user)
         if not resolver.can_read(document):
-            return {**base, "content_snapshot": None, "available": False, "status": "FORBIDDEN", "message": "当前无权查看该引用"}
+            return {**base, "content_snapshot": None, "available": False, "can_download": False, "status": "FORBIDDEN", "message": "当前无权查看该引用"}
         available, status = self._availability(document, chunk, kb)
         return {
             **base,
             "content_snapshot": source.content_snapshot,
             "available": available,
+            "can_download": available,
             "status": status,
             "message": None,
         }
+
+    def _matched_keywords(self, message_id: uuid.UUID, content: str | None) -> list[str]:
+        """命中的原文关键词：取提问中出现在引用片段里的词。"""
+        if not content:
+            return []
+        message = self.session.get(ChatMessage, message_id)
+        if message is None:
+            return []
+        question = self.session.scalar(
+            select(ChatMessage.content).where(
+                ChatMessage.session_id == message.session_id,
+                ChatMessage.role == ChatMessageRole.USER,
+                ChatMessage.created_at <= message.created_at,
+            ).order_by(ChatMessage.created_at.desc()).limit(1)
+        )
+        if not question:
+            return []
+        lowered = content.lower()
+        tokens = [token for token in keyword_text(question).split() if len(token) >= 2]
+        return [token for token in dict.fromkeys(tokens) if token in lowered][:8]
 
     def _current_state(self, document_id: uuid.UUID, chunk_id: uuid.UUID):
         document = self.session.get(Document, document_id)

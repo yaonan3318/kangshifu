@@ -68,7 +68,19 @@ export async function getDocument(id: string): Promise<DocumentRecord> {
 export async function restoreDocument(id: string): Promise<DocumentRecord> { return parseResponse(await fetch(`/api/documents/${id}/restore`, {method:'POST'})) }
 export async function purgeDocument(id: string): Promise<void> { await parseResponse<void>(await fetch(`/api/documents/${id}/purge`, {method:'DELETE'})) }
 export async function setDocumentEnabled(id: string, enabled: boolean): Promise<DocumentRecord> { return parseResponse(await fetch(`/api/documents/${id}/${enabled?'enable':'disable'}`, {method:'POST'})) }
-export async function updateDocument(id: string, body: {knowledge_base_id?:string;relative_path?:string;tags?:string[];metadata?:Record<string,unknown>}): Promise<DocumentRecord> { return parseResponse(await fetch(`/api/documents/${id}`, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})) }
+export interface DocumentUpdateInput {
+  knowledge_base_id?: string
+  relative_path?: string
+  tags?: string[]
+  metadata?: Record<string, unknown>
+  author?: string | null
+  department_id?: string | null
+  topic?: string | null
+  related_document_ids?: string[]
+  valid_from?: string | null
+  valid_until?: string | null
+}
+export async function updateDocument(id: string, body: DocumentUpdateInput): Promise<DocumentRecord> { return parseResponse(await fetch(`/api/documents/${id}`, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})) }
 export async function listDocumentVersions(id: string): Promise<DocumentRecord[]> { return parseResponse(await fetch(`/api/documents/${id}/versions`)) }
 
 export async function getDocumentContent(id: string, page = 1, pageSize = 25): Promise<DocumentContent> {
@@ -117,5 +129,35 @@ export async function setDocumentAccess(id: string, body: { visibility?: string;
 export async function setDocumentExternalPolicy(id: string, body: { sensitivity_level: string; external_llm_allowed: boolean }): Promise<DocumentRecord> {
   return parseResponse(await fetch(`/api/documents/${id}/external-policy`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }))
+}
+
+export interface ChunkPreviewItem {
+  sequence_number: number
+  content: string
+  length: number
+  page_start: number | null
+  page_end: number | null
+  slide_number: number | null
+  sheet_name: string | null
+  row_start: number | null
+  row_end: number | null
+  section_path: string[]
+  block_type: string
+  chunk_role: string
+}
+
+export interface ChunkPreviewResponse {
+  items: ChunkPreviewItem[]
+  total: number
+  config: Record<string, unknown>
+}
+
+export async function previewDocumentChunks(
+  id: string,
+  body: { chunking_config?: Record<string, unknown> | null; limit?: number } = {},
+): Promise<ChunkPreviewResponse> {
+  return parseResponse(await fetch(`/api/documents/${id}/chunk-preview`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   }))
 }

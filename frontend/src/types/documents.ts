@@ -21,6 +21,12 @@ export interface DocumentRecord {
   enabled: boolean
   visibility: string
   owner_user_id: string | null
+  author?: string | null
+  department_id?: string | null
+  topic?: string | null
+  related_document_ids?: string[]
+  valid_from?: string | null
+  valid_until?: string | null
   sensitivity_level: string
   external_llm_allowed: boolean
   deleted_at: string | null

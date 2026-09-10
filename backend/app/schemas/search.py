@@ -5,6 +5,8 @@ from datetime import date
 
 from pydantic import BaseModel, Field
 
+from app.models.document import DocumentStatus
+
 
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=1000)
@@ -16,6 +18,13 @@ class SearchRequest(BaseModel):
     # 助手知识库范围：允许检索的知识库白名单；为空表示不限制。
     knowledge_base_ids: list[uuid.UUID] = Field(default_factory=list, max_length=50)
     tags: list[str] = Field(default_factory=list, max_length=20)
+    # 结构化元数据过滤；权限过滤始终先于这些条件执行。
+    department_id: uuid.UUID | None = None
+    owner_user_id: uuid.UUID | None = None
+    document_status: DocumentStatus | None = None
+    relative_path: str | None = Field(default=None, max_length=2048)
+    version_number: int | None = Field(default=None, ge=1)
+    valid_only: bool = False
     include_stages: bool = False
     limit: int = Field(default=10, ge=1, le=50)
 
@@ -25,6 +34,7 @@ class SearchResult(BaseModel):
     document_id: uuid.UUID
     document_name: str
     extension: str
+    document_version: int | None = None
     sequence_number: int
     content: str
     page_start: int | None
@@ -43,6 +53,18 @@ class SearchResult(BaseModel):
     final_score: float
     base_score: float | None = None
     feedback_boost: float = 0.0
+    pre_rerank_rank: int | None = None
+    post_rerank_rank: int | None = None
+
+
+class QueryRewriteInfo(BaseModel):
+    original: str
+    standalone_question: str
+    retrieval_query: str
+    queries: list[str] = Field(default_factory=list)
+    used_context: bool = False
+    rewritten: bool = False
+    warning: str | None = None
 
 
 class RetrievalStageItem(BaseModel):
@@ -62,6 +84,10 @@ class SearchDiagnostics(BaseModel):
     no_answer_reason: str | None = None
     timings_ms: dict[str, float] = Field(default_factory=dict)
     stages: dict[str, list[RetrievalStageItem]] = Field(default_factory=dict)
+    queries: list[str] = Field(default_factory=list)
+    retrieval_query: str | None = None
+    rerank_applied: bool = False
+    candidate_count: int = 0
 
 
 class SearchResponse(BaseModel):

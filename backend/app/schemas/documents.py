@@ -31,6 +31,12 @@ class DocumentResponse(BaseModel):
     enabled: bool
     visibility: str
     owner_user_id: uuid.UUID | None
+    author: str | None = None
+    department_id: uuid.UUID | None = None
+    topic: str | None = None
+    related_document_ids: list[str] = Field(default_factory=list)
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
     sensitivity_level: str = "INTERNAL"
     external_llm_allowed: bool = True
     deleted_at: datetime | None
@@ -96,6 +102,40 @@ class DocumentUpdateRequest(BaseModel):
     relative_path: str | None = Field(default=None, max_length=2048)
     metadata: dict | None = None
     tags: list[str] | None = Field(default=None, max_length=30)
+    # P2-6 文档理解元数据：作者/部门/主题/关联文档/有效期。
+    author: str | None = Field(default=None, max_length=255)
+    department_id: uuid.UUID | None = None
+    topic: str | None = Field(default=None, max_length=255)
+    related_document_ids: list[uuid.UUID] | None = Field(default=None, max_length=50)
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+
+
+class ChunkPreviewRequest(BaseModel):
+    """切片预览：可临时覆盖知识库的切片配置，不写入数据库。"""
+    chunking_config: dict | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class ChunkPreviewItem(BaseModel):
+    sequence_number: int
+    content: str
+    length: int
+    page_start: int | None
+    page_end: int | None
+    slide_number: int | None
+    sheet_name: str | None
+    row_start: int | None
+    row_end: int | None
+    section_path: list[str]
+    block_type: str
+    chunk_role: str
+
+
+class ChunkPreviewResponse(BaseModel):
+    items: list[ChunkPreviewItem]
+    total: int
+    config: dict
 
 
 class DocumentDeleteRequest(BaseModel):

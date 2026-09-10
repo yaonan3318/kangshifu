@@ -15,6 +15,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.assistants import router as assistants_router
+from app.api.chatflows import router as chatflows_router
+from app.api.knowledge_gaps import router as knowledge_gaps_router
 from app.api.auth import COOKIE, current_user, router as auth_router
 from app.api.departments import router as departments_router
 from app.api.documents import router as documents_router
@@ -187,6 +189,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(retrieval_lab_router)
     app.include_router(chat_router)
     app.include_router(assistants_router)
+    app.include_router(chatflows_router)
+    app.include_router(knowledge_gaps_router)
     app.include_router(auth_router)
     app.include_router(users_router)
     app.include_router(departments_router)

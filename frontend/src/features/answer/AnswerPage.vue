@@ -5,8 +5,8 @@ import { getAnswerStatus, streamAnswer, warmUpAnswer } from '../../api/answer'
 import type { AnswerEvent, AnswerMetrics, AnswerSource, AnswerStatus, AnswerTurn, CitationSource } from '../../types/answer'
 import { listKnowledgeBases } from '../../api/knowledgeBases'
 import type { KnowledgeBaseRecord } from '../../types/knowledgeBases'
-import { listAssistants } from '../../api/assistants'
-import type { AssistantRecord } from '../../types/assistant'
+import { getAssistantWelcome, listAssistants } from '../../api/assistants'
+import type { AssistantRecord, AssistantWelcome } from '../../types/assistant'
 import { submitFeedback } from '../../api/feedback'
 import { confirmApproval, getHarnessTask, rejectApproval, resumeHarness } from '../../api/harness'
 import { archiveChatSession, createChatSession, deleteChatSession, getChatSession, listChatSessions, renameChatSession, restoreChatSession } from '../../api/chat'
@@ -31,6 +31,8 @@ const assistants = ref<AssistantRecord[]>([])
 const currentAssistantId = ref('')
 const currentAssistant = computed(() => assistants.value.find((item) => item.id === currentAssistantId.value) ?? assistants.value[0] ?? null)
 const assistantAvatar = computed(() => currentAssistant.value?.avatar || '康')
+const assistantWelcome = ref<AssistantWelcome | null>(null)
+const generalKnowledgeAllowed = computed(() => Boolean(currentAssistant.value?.use_deepseek_allowed && currentAssistant.value?.deepseek_enabled))
 
 const sessions = ref<ChatSessionItem[]>([])
 const sessionsLoading = ref(false)
@@ -74,10 +76,25 @@ const scopeLabel = computed(() => {
 
 const stageLabels: Record<string, string> = {
   understanding: '正在理解问题',
+  rewriting: '正在改写检索问题',
   retrieving: '正在检索公司资料',
-  reranking: '正在重排检索结果',
-  local_generating: '千问正在根据资料生成',
-  deepseek_enhancing: 'DeepSeek 正在增强答案',
+  candidates: '正在筛选候选片段',
+  reranking: '正在筛选最相关资料',
+  local_generating: '正在组织答案',
+  deepseek_enhancing: '正在组织答案（DeepSeek）',
+  checking: '正在核对引用',
+}
+
+function stageText(turn: AnswerTurn): string {
+  const stage = turn.stage ?? 'understanding'
+  const detail = turn.stageDetail ?? {}
+  if (stage === 'retrieving' && detail.knowledge_base_count) {
+    return `正在检索 ${detail.knowledge_base_count} 个知识库`
+  }
+  if (stage === 'candidates' && typeof detail.candidate_count === 'number') {
+    return `找到 ${detail.candidate_count} 个候选片段`
+  }
+  return stageLabels[stage] ?? '正在生成'
 }
 
 async function loadStatus() {
@@ -121,10 +138,25 @@ async function loadAssistants() {
     if (!currentAssistantId.value && assistants.value.length) {
       currentAssistantId.value = assistants.value[0].id
     }
+    await loadAssistantWelcome()
   } catch {
     // 助手列表不可用不影响基本问答
   }
 }
+
+async function loadAssistantWelcome() {
+  if (!currentAssistantId.value) {
+    assistantWelcome.value = null
+    return
+  }
+  try {
+    assistantWelcome.value = await getAssistantWelcome(currentAssistantId.value)
+  } catch {
+    assistantWelcome.value = null
+  }
+}
+
+watch(currentAssistantId, () => { void loadAssistantWelcome() })
 
 function storeActiveSession(id: string | null) {
   if (id) window.localStorage.setItem(ACTIVE_SESSION_KEY, id)
@@ -148,7 +180,7 @@ function ensureTurns(sessionId: string): AnswerTurn[] {
   return sessionCache[sessionId]
 }
 
-function dbSourceToUi(source: { citation_number: number; document_id: string; chunk_id: string; document_name: string; content_snapshot: string | null; location_snapshot: Record<string, unknown>; score?: number | null; available: boolean; status: string; message?: string | null }): CitationSource {
+function dbSourceToUi(source: { citation_number: number; document_id: string; chunk_id: string; document_name: string; content_snapshot: string | null; location_snapshot: Record<string, unknown>; score?: number | null; available: boolean; status: string; message?: string | null; version_number?: number | null; matched_keywords?: string[]; can_download?: boolean; extension?: string | null }): CitationSource {
   const location = source.location_snapshot
   const locationText = (typeof location.text === 'string' && location.text) || '片段内容'
   return {
@@ -160,6 +192,10 @@ function dbSourceToUi(source: { citation_number: number; document_id: string; ch
     location_text: locationText,
     score: source.score ?? null,
     available: source.available,
+    can_download: source.can_download ?? false,
+    extension: source.extension ?? null,
+    version_number: source.version_number ?? null,
+    matched_keywords: source.matched_keywords ?? [],
     status: (source.status as CitationSource['status']) || 'ACTIVE',
     message: source.message ?? null,
     meta: source.location_snapshot,
@@ -183,6 +219,9 @@ function sseSourceToUi(source: AnswerSource): CitationSource {
     location_text: locationText,
     score: source.score ?? null,
     available: true,
+    can_download: true,
+    extension: source.extension,
+    version_number: source.document_version ?? null,
     status: 'ACTIVE',
     meta: {
       page_start: source.page_start, page_end: source.page_end, slide_number: source.slide_number,
@@ -241,6 +280,10 @@ function turnFromHistory(messages: ChatMessageRecord[]): AnswerTurn[] {
       turn.provider = message.provider ?? 'LOCAL'
       turn.scope = message.knowledge_scope as AnswerTurn['scope']
       turn.metrics = (message.metrics ?? {}) as AnswerMetrics
+      turn.confidence = turn.metrics.confidence ?? null
+      turn.citationCheck = turn.metrics.citation_check ?? null
+      turn.noAnswer = turn.metrics.no_answer ?? null
+      turn.questionType = turn.metrics.question_type_label ?? null
       turn.sources = message.sources.map(dbSourceToUi)
       if (message.status === 'FAILED') {
         turn.failed = true
@@ -519,9 +562,26 @@ async function regenerate(turn: AnswerTurn) {
 
 function handleAnswerEvent(turn: AnswerTurn, event: AnswerEvent) {
   handleHarnessEvent(turn, event)
-  if (event.type === 'stage') turn.stage = event.stage ?? null
+  if (event.type === 'stage') {
+    turn.stage = event.stage ?? null
+    turn.stageDetail = event.detail ?? null
+  }
+  if (event.type === 'suggestions' && event.suggestions) turn.suggestions = event.suggestions
   if (event.type === 'sources') turn.sources = (event.sources ?? []).map(sseSourceToUi)
   if (event.type === 'metrics' && event.metrics) turn.metrics = event.metrics
+  if (event.type === 'query_rewrite' && event.query_rewrite) {
+    turn.metrics = {
+      ...(turn.metrics ?? {}),
+      retrieval_query: event.query_rewrite.retrieval_query,
+      retrieval_queries: event.query_rewrite.queries,
+    }
+  }
+  if (event.type === 'confidence' && event.confidence) {
+    turn.confidence = event.confidence
+    if (event.question_type) turn.questionType = event.question_type
+  }
+  if (event.type === 'citation_check' && event.citation_check) turn.citationCheck = event.citation_check
+  if (event.type === 'no_answer' && event.no_answer) turn.noAnswer = event.no_answer
   if (event.type === 'replace') { turn.answer = ''; turn.provider = event.provider ?? 'DEEPSEEK' }
   if (event.type === 'delta') { turn.answer += event.text ?? ''; if (event.provider) turn.provider = event.provider }
   if (event.type === 'warning' && event.warning) turn.warnings.push(event.warning)
@@ -646,6 +706,39 @@ function copyAnswer(turn: AnswerTurn) {
   void navigator.clipboard.writeText(turn.answer)
 }
 
+function exportMarkdown(turn: AnswerTurn) {
+  const lines = [`# ${turn.question}`, '', turn.answer, '']
+  if (turn.sources.length) {
+    lines.push('## 引用来源')
+    for (const source of turn.sources) {
+      lines.push(`- [${source.citation_number}] ${source.document_name} · ${source.location_text}`)
+    }
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `answer-${turn.key}.md`
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+function exportPdf() {
+  // 浏览器“打印为 PDF”：只打印当前回答卡片，避免额外依赖。
+  document.body.classList.add('printing-answer')
+  try {
+    window.print()
+  } finally {
+    window.setTimeout(() => document.body.classList.remove('printing-answer'), 0)
+  }
+}
+
+function reportAnswer(turn: AnswerTurn) {
+  turn.feedbackReasons = ['举报敏感或错误内容']
+  turn.feedbackComment = turn.feedbackComment ?? ''
+  void sendFeedback(turn, 'DOWN')
+}
+
 function formatMs(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '-'
   if (value >= 1000) return `${(value / 1000).toFixed(1)}s`
@@ -656,8 +749,10 @@ function latencySummary(turn: AnswerTurn): string {
   const metrics = turn.metrics
   if (!metrics) return ''
   const parts = [
+    `检索 ${formatMs(metrics.retrieval_ms ?? null)}`,
+    `生成 ${formatMs(metrics.llm_generation_ms ?? null)}`,
     `首字 ${formatMs(metrics.llm_first_token_ms ?? null)}`,
-    `回答 ${formatMs(metrics.total_ms ?? null)}`,
+    `总计 ${formatMs(metrics.total_ms ?? null)}`,
   ]
   if (metrics.cache_hit) parts.push('缓存命中')
   return parts.join(' · ')
@@ -713,7 +808,7 @@ watch([sessionSearch, showArchived], () => {
   searchTimer = window.setTimeout(refreshSessions, 250)
 })
 
-const DOWN_REASONS = ['答非所问', '内容不准确', '引用不正确', '资料已经过期', '回答不完整', '没有找到已有资料', '回答速度太慢']
+const DOWN_REASONS = ['答非所问', '内容不准确', '引用不正确', '资料已经过期', '回答不完整', '没有找到已有资料', '回答速度太慢', '缺失知识', '资料不足', '举报敏感或错误内容']
 
 function openFeedbackMode(turn: AnswerTurn) {
   turn.feedbackMode = !turn.feedbackMode
@@ -734,6 +829,16 @@ async function sendFeedback(turn: AnswerTurn, rating: 'UP' | 'DOWN') {
   } catch (reason) {
     turn.warnings.push({ code: 'FEEDBACK_FAILED', message: reason instanceof Error ? reason.message : '反馈提交失败' })
   }
+}
+
+function askGeneralKnowledge(turn: AnswerTurn) {
+  void regenerate(turn)
+}
+
+async function submitMissingKnowledge(turn: AnswerTurn) {
+  turn.feedbackReasons = ['缺失知识']
+  turn.feedbackComment = turn.feedbackComment ?? ''
+  await sendFeedback(turn, 'DOWN')
 }
 
 function toggleReason(turn: AnswerTurn, reason: string) {
@@ -818,7 +923,8 @@ onBeforeUnmount(() => {
           <span class="qa-chip" :class="ollamaReady ? 'is-ready' : 'is-offline'">
             {{ ollamaReady ? '千问已就绪' : '本地模型未就绪' }}
           </span>
-          <span class="qa-chip" :class="status?.deepseek_configured ? 'is-ready' : ''">DeepSeek {{ status?.deepseek_configured ? '可用' : '关闭' }}</span>
+          <span class="qa-chip" :class="generalKnowledgeAllowed ? 'is-ready' : ''">{{ generalKnowledgeAllowed ? '可查通用知识' : '仅内部资料' }}</span>
+          <span v-if="assistantWelcome?.operations_allowed" class="qa-chip is-ready">可执行运维任务</span>
           <button v-if="ollamaReady" type="button" class="qa-topbutton" :disabled="warming" @click="warmUpModel(true)">{{ warming ? '预热中…' : '预热模型' }}</button>
           <button type="button" class="qa-topbutton" @click="loadStatus">重新检查</button>
         </div>
@@ -849,6 +955,38 @@ onBeforeUnmount(() => {
               >{{ item.name }}</button>
             </div>
           </div>
+
+          <div v-if="assistantWelcome" class="welcome-capabilities">
+            <div class="welcome-cap-block">
+              <strong>能做什么</strong>
+              <ul v-if="assistantWelcome.capabilities.length">
+                <li v-for="item in assistantWelcome.capabilities" :key="item">{{ item }}</li>
+              </ul>
+              <p v-else class="assistant-hint">基于已授权资料回答并标注引用。</p>
+            </div>
+            <div class="welcome-cap-block">
+              <strong>不能做什么</strong>
+              <ul v-if="assistantWelcome.limitations.length">
+                <li v-for="item in assistantWelcome.limitations" :key="item">{{ item }}</li>
+              </ul>
+              <p v-else class="assistant-hint">不访问无权资料，没有依据时不编造结论。</p>
+            </div>
+            <div class="welcome-cap-block">
+              <strong>可访问资料范围</strong>
+              <p>{{ assistantWelcome.knowledge_scope }}</p>
+              <p class="assistant-hint">
+                通用知识：{{ assistantWelcome.general_knowledge_allowed ? '允许' : '不允许' }} ·
+                运维任务：{{ assistantWelcome.operations_allowed ? '允许' : '不允许' }} ·
+                联网：{{ assistantWelcome.internet_enabled ? '允许' : '不允许' }}
+              </p>
+            </div>
+            <div v-if="assistantWelcome.recent_questions.length" class="welcome-cap-block">
+              <strong>最近热门问题</strong>
+              <div class="welcome-suggestions">
+                <button v-for="item in assistantWelcome.recent_questions" :key="item" type="button" class="suggestion-chip" @click="ask(item)">{{ item }}</button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div v-for="turn in activeTurns" :key="turn.key" class="qa-turn">
@@ -868,18 +1006,23 @@ onBeforeUnmount(() => {
                   <strong>{{ providerLabel(turn) }}</strong>
                   <span class="scope-badge" v-if="turn.scope === 'INTERNAL_LIMITED'">内部资料依据有限</span>
                   <span class="scope-badge warn" v-else-if="turn.scope === 'GENERAL'">不来自公司资料库</span>
+                  <span v-if="turn.confidence" class="confidence-badge" :class="`conf-${turn.confidence.tier.toLowerCase()}`">{{ turn.confidence.label }}</span>
+                  <span v-if="turn.questionType" class="scope-badge">{{ turn.questionType }}</span>
                   <span class="status-badge" v-if="turn.stopped">已停止</span>
                   <span class="status-badge fail" v-else-if="turn.failed">生成失败</span>
                 </div>
               </div>
               <div class="answer-actions" v-if="turn.answer || !turn.generating">
                 <button v-if="turn.answer" type="button" title="复制回答" @click="copyAnswer(turn)">复制</button>
+                <button v-if="turn.answer" type="button" title="导出 Markdown" @click="exportMarkdown(turn)">导出 MD</button>
+                <button v-if="turn.answer" type="button" title="打印/导出 PDF" @click="exportPdf">导出 PDF</button>
                 <button v-if="turn.answer && !turn.generating" type="button" title="重新生成" @click="regenerate(turn)">重新生成</button>
+                <button v-if="turn.answer && !turn.generating" type="button" class="text-danger" title="举报敏感或错误答案" @click="reportAnswer(turn)">举报</button>
               </div>
             </header>
 
             <div v-if="turn.generating" class="answer-stage">
-              <span></span>{{ stageLabels[turn.stage ?? 'understanding'] ?? '正在生成' }}
+              <span></span>{{ stageText(turn) }}
             </div>
             <div v-if="turn.stage === 'local_generating' && !turn.answer" class="typing-dots"><i></i><i></i><i></i></div>
 
@@ -889,6 +1032,37 @@ onBeforeUnmount(() => {
 
             <p v-if="turn.errorMessage && !turn.answer" class="answer-notice is-warning">{{ turn.errorMessage }}</p>
             <p v-for="warning in turn.warnings" :key="warning.code" class="answer-notice is-warning">{{ warning.message }}</p>
+
+            <div v-if="turn.citationCheck && !turn.citationCheck.ok" class="citation-check-note">
+              <span v-if="turn.citationCheck.invalid_numbers.length">存在无效引用编号：{{ turn.citationCheck.invalid_numbers.join('、') }}</span>
+              <span v-if="turn.citationCheck.unsupported_sentences.length">有 {{ turn.citationCheck.unsupported_sentences.length }} 处内容缺少依据，已标记为“推断”。</span>
+              <span v-if="turn.citationCheck.unavailable_citations.length">引用 {{ turn.citationCheck.unavailable_citations.join('、') }} 对应的资料当前不可访问。</span>
+            </div>
+
+            <div v-if="turn.noAnswer" class="no-answer-panel">
+              <p class="no-answer-message">{{ turn.noAnswer.message }}</p>
+              <div v-if="turn.noAnswer.recommended_documents.length" class="no-answer-block">
+                <strong>推荐相关资料</strong>
+                <ul>
+                  <li v-for="doc in turn.noAnswer.recommended_documents" :key="doc.id">
+                    <button type="button" class="link-button" @click="openInLibrary(doc.id)">{{ doc.name }}</button>
+                  </li>
+                </ul>
+              </div>
+              <div v-if="turn.noAnswer.rephrase_suggestions.length" class="no-answer-block">
+                <strong>换一种问法</strong>
+                <ul><li v-for="(tip, index) in turn.noAnswer.rephrase_suggestions" :key="index">{{ tip }}</li></ul>
+              </div>
+              <div class="no-answer-actions">
+                <button v-if="turn.noAnswer.allow_deepseek && turn.noAnswer.deepseek_configured" type="button" class="secondary-action" @click="askGeneralKnowledge(turn)">使用 DeepSeek 通用知识</button>
+                <button type="button" class="secondary-action" @click="submitMissingKnowledge(turn)">提交“缺失知识”反馈</button>
+              </div>
+            </div>
+
+            <div v-if="turn.suggestions && turn.suggestions.length && !turn.generating" class="follow-up-suggestions">
+              <span>你可能还想问：</span>
+              <button v-for="item in turn.suggestions" :key="item" type="button" class="suggestion-chip" @click="ask(item)">{{ item }}</button>
+            </div>
 
             <div v-if="turn.stopped && turn.answer" class="stopped-note">回答已被停止，以下是已生成的部分。</div>
 
@@ -921,6 +1095,10 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
+            <p v-if="turn.metrics?.retrieval_query && turn.metrics.retrieval_query !== turn.question" class="retrieval-query-note">
+              实际检索问题：{{ turn.metrics.retrieval_query }}
+              <span v-if="turn.metrics.retrieval_queries && turn.metrics.retrieval_queries.length > 1">（多查询：{{ turn.metrics.retrieval_queries.join(' ｜ ') }}）</span>
+            </p>
             <footer v-if="turn.answer || turn.sources.length" class="answer-card-foot">
               <span v-if="turn.answer && turn.metrics && latencySummary(turn)" class="metrics-note">{{ latencySummary(turn) }}</span>
               <span v-if="turn.sources.length" class="source-toggle" @click="turn.sourcesVisible = !turn.sourcesVisible">

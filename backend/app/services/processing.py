@@ -9,10 +9,10 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.models import Document, DocumentChunk, DocumentStatus, JobStatus, JobType, ProcessingJob
+from app.models import Document, DocumentChunk, DocumentStatus, JobStatus, JobType, KnowledgeBase, ProcessingJob
 from app.ocr import TesseractOcrEngine
 from app.parsers import ParserRegistry
-from app.services.chunking import chunk_blocks
+from app.services.chunking import ChunkingConfig, chunk_blocks
 from app.services.embeddings import EmbeddingService
 from app.services.keywords import keyword_text
 from app.services.managed_storage import ManagedStorage
@@ -101,17 +101,24 @@ class ProcessingService:
 
         document.status = DocumentStatus.CHUNKING
         self.session.commit()
-        chunks = chunk_blocks(blocks)
+        knowledge_base = self.session.get(KnowledgeBase, document.knowledge_base_id)
+        config = ChunkingConfig.from_dict(knowledge_base.chunking_config if knowledge_base else None)
+        chunks = chunk_blocks(blocks, config)
         if not chunks:
             raise ValueError("EMPTY_CONTENT")
 
         self.session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
+        parent_sequence: int | None = None
         for sequence, chunk in enumerate(chunks, start=1):
+            if chunk.chunk_role == "parent":
+                parent_sequence = sequence
             self.session.add(DocumentChunk(
                 document_id=document.id, sequence_number=sequence, content=chunk.content,
                 page_start=chunk.page_start, page_end=chunk.page_end, slide_number=chunk.slide_number,
                 sheet_name=chunk.sheet_name, row_start=chunk.row_start, row_end=chunk.row_end,
                 section_path=chunk.section_path, ocr_confidence=chunk.ocr_confidence,
+                chunk_role=chunk.chunk_role,
+                parent_sequence_number=(parent_sequence if chunk.chunk_role == "child" else None),
                 token_count=len(keyword_text(chunk.content).split()),
             ))
         document.status = DocumentStatus.PARSED

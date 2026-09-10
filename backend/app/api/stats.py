@@ -10,8 +10,9 @@ from sqlalchemy.orm import Session
 from app.db import get_session
 from app.errors import AppError
 from app.models import ChatMessage, ChatMessageRole, ChatMessageSource, ChatSession
+from app.services.permissions import require_user
 from app.services.rbac import require_permission
-from app.services.stats import compute_overview
+from app.services.stats import compute_dashboard, compute_overview
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
@@ -20,6 +21,16 @@ STATS_VIEW = "STATS_VIEW"
 
 def _stats_user(request: Request):
     return require_permission(getattr(request.state, "auth_user", None), STATS_VIEW)
+
+
+@router.get("/dashboard")
+def dashboard(
+    request: Request,
+    session: Annotated[Session, Depends(get_session)],
+) -> dict:
+    """首页/比赛演示数据：仅汇总计数，登录即可查看，不含用户隐私明细。"""
+    require_user(getattr(request.state, "auth_user", None))
+    return compute_dashboard(session)
 
 
 @router.get("/overview")

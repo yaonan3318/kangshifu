@@ -30,8 +30,11 @@ class KnowledgeBaseService:
             raise AppError("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在或已停用", 404)
         return value
 
-    def create(self, name: str, description: str | None) -> KnowledgeBase:
-        value = KnowledgeBase(name=name.strip(), description=description.strip() if description else None)
+    def create(self, name: str, description: str | None, chunking_config: dict | None = None) -> KnowledgeBase:
+        value = KnowledgeBase(
+            name=name.strip(), description=description.strip() if description else None,
+            chunking_config=chunking_config or {},
+        )
         self.session.add(value)
         try:
             self.session.commit()
@@ -41,12 +44,17 @@ class KnowledgeBaseService:
         self.session.refresh(value)
         return value
 
-    def update(self, knowledge_base_id: uuid.UUID, name: str | None, description: str | None) -> KnowledgeBase:
+    def update(
+        self, knowledge_base_id: uuid.UUID, name: str | None, description: str | None,
+        chunking_config: dict | None = None, chunking_config_set: bool = False,
+    ) -> KnowledgeBase:
         value = self.get(knowledge_base_id)
         if name is not None:
             value.name = name.strip()
         if description is not None:
             value.description = description.strip() or None
+        if chunking_config_set:
+            value.chunking_config = chunking_config or {}
         try:
             self.session.commit()
         except IntegrityError:

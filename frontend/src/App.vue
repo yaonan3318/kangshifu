@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, provide, ref, watch } from 'vue'
+import Dashboard from './features/dashboard/Dashboard.vue'
 import AnswerPage from './features/answer/AnswerPage.vue'
 import DocumentLibrary from './features/documents/DocumentLibrary.vue'
 import SearchPage from './features/search/SearchPage.vue'
@@ -9,10 +10,10 @@ import LoginPanel from './components/LoginPanel.vue'
 import { getAuthState, logoutRequest, type AuthUser } from './api/auth'
 import { clearPermissions, hasAnyPermission, hasPermission, setPermissions } from './utils/permissions'
 
-type PageKey = 'answer' | 'search' | 'library' | 'lab' | 'system'
+type PageKey = 'dashboard' | 'answer' | 'search' | 'library' | 'lab' | 'system'
 const LAST_PAGE_PREFIX = 'company-search:last-page:'
 
-const page = ref<PageKey>('answer')
+const page = ref<PageKey>('dashboard')
 const currentUser = ref<AuthUser | null>(null)
 const checking = ref(true)
 const sessionStarted = ref(false)
@@ -20,6 +21,7 @@ const sessionStarted = ref(false)
 const isSuper = computed(() => Boolean(currentUser.value?.is_super_admin))
 
 const pages: Record<PageKey, unknown> = {
+  dashboard: Dashboard,
   answer: AnswerPage,
   search: SearchPage,
   library: DocumentLibrary,
@@ -32,7 +34,7 @@ const activePage = computed(() => pages[page.value])
 const SYSTEM_PERMISSIONS = ['IDENTITY_MANAGE', 'ASSISTANT_MANAGE', 'AUDIT_VIEW', 'STATS_VIEW'] as const
 
 const navItems = computed(() => {
-  const items: Array<{ key: PageKey; label: string }> = []
+  const items: Array<{ key: PageKey; label: string }> = [{ key: 'dashboard', label: '首页' }]
   if (hasPermission('ANSWER_USE')) items.push({ key: 'answer', label: '知识问答' })
   if (hasPermission('SEARCH_USE')) items.push({ key: 'search', label: '资料检索' })
   if (hasPermission('DOCUMENT_VIEW')) items.push({ key: 'library', label: '资料库' })
@@ -43,6 +45,7 @@ const navItems = computed(() => {
 
 function isPageAllowed(target: PageKey, user: AuthUser | null = currentUser.value): boolean {
   if (!(target in pages)) return false
+  if (target === 'dashboard') return true
   if (target === 'answer') return hasPermission('ANSWER_USE')
   if (target === 'search') return hasPermission('SEARCH_USE')
   if (target === 'library') return hasPermission('DOCUMENT_VIEW')
@@ -51,7 +54,7 @@ function isPageAllowed(target: PageKey, user: AuthUser | null = currentUser.valu
   return false
 }
 
-const PAGE_ORDER: PageKey[] = ['answer', 'search', 'library', 'lab', 'system']
+const PAGE_ORDER: PageKey[] = ['dashboard', 'answer', 'search', 'library', 'lab', 'system']
 
 function defaultPageFor(user: AuthUser | null): PageKey {
   return PAGE_ORDER.find((key) => isPageAllowed(key, user)) ?? 'answer'
@@ -59,7 +62,7 @@ function defaultPageFor(user: AuthUser | null): PageKey {
 
 function restorePageForUser(user: AuthUser | null) {
   if (!user) {
-    page.value = 'answer'
+    page.value = 'dashboard'
     return
   }
   const stored = window.localStorage.getItem(`${LAST_PAGE_PREFIX}${user.id}`) as PageKey | null
@@ -88,7 +91,7 @@ async function boot() {
   } catch {
     currentUser.value = null
     clearPermissions()
-    page.value = 'answer'
+    page.value = 'dashboard'
   } finally {
     checking.value = false
   }
@@ -105,7 +108,7 @@ async function handleLogout() {
     currentUser.value = null
     clearPermissions()
     sessionStarted.value = false
-    page.value = 'answer'
+    page.value = 'dashboard'
   }
 }
 

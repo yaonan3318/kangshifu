@@ -7,6 +7,8 @@ import { createAssistant, deleteAssistant, setAssistantEnabled, setAssistantKnow
 import { listAssistants } from '../../api/assistants'
 import type { AssistantRecord } from '../../types/assistant'
 import { getHarnessStatus, getNamespaces } from '../../api/harness'
+import { listChatflows } from '../../api/chatflows'
+import type { ChatflowRecord } from '../../types/chatflow'
 
 const DEFAULT_PROMPT = '你是公司内部知识助手。只能把提供的内部资料作为公司事实依据，用专业、简洁、有引用的中文回答；没有可靠资料时明确说明，不编造公司结论。'
 
@@ -21,6 +23,7 @@ const useAllKnowledgeBases = ref(true)
 const selectedKbIds = ref<string[]>([])
 const harnessContexts = ref<string[]>([])
 const harnessNamespaces = ref<string[]>(['default'])
+const chatflows = ref<ChatflowRecord[]>([])
 
 const selected = computed(() => assistants.value.find((item) => item.id === selectedId.value) ?? null)
 
@@ -41,18 +44,26 @@ const form = reactive({
   welcome_message: '',
   system_prompt: DEFAULT_PROMPT,
   recommended_questions: '',
+  answer_template: 'AUTO',
+  internet_enabled: false,
+  no_answer_policy: 'SUGGEST',
+  capabilities: '',
+  limitations: '',
+  chatflow_id: '',
 })
 
 async function refresh() {
   loading.value = true
   error.value = ''
   try {
-    const [assistantResult, kbResult, harnessResult] = await Promise.all([
+    const [assistantResult, kbResult, harnessResult, flowResult] = await Promise.all([
       listAssistants(), listKnowledgeBases(), getHarnessStatus().catch(() => null),
+      listChatflows().catch(() => [] as ChatflowRecord[]),
     ])
     assistants.value = assistantResult.items
     knowledgeBases.value = kbResult.items
     harnessContexts.value = harnessResult?.contexts ?? []
+    chatflows.value = flowResult
     if (selectedId.value && !assistants.value.some((item) => item.id === selectedId.value)) selectedId.value = ''
     if (selected.value && editorOpen.value) applyToForm(selected.value)
   } catch (reason) {
@@ -80,6 +91,12 @@ function applyToForm(item: AssistantRecord) {
   form.welcome_message = item.welcome_message || ''
   form.system_prompt = item.system_prompt || DEFAULT_PROMPT
   form.recommended_questions = (item.recommended_questions || []).join('\n')
+  form.answer_template = item.answer_template || 'AUTO'
+  form.internet_enabled = Boolean(item.internet_enabled)
+  form.no_answer_policy = item.no_answer_policy || 'SUGGEST'
+  form.capabilities = (item.capabilities || []).join('\n')
+  form.limitations = (item.limitations || []).join('\n')
+  form.chatflow_id = item.chatflow_id || ''
   selectedKbIds.value = item.knowledge_base_ids ?? []
   useAllKnowledgeBases.value = !(item.knowledge_base_ids?.length)
 }
@@ -109,6 +126,12 @@ function newForm() {
   form.welcome_message = ''
   form.system_prompt = DEFAULT_PROMPT
   form.recommended_questions = ''
+  form.answer_template = 'AUTO'
+  form.internet_enabled = false
+  form.no_answer_policy = 'SUGGEST'
+  form.capabilities = ''
+  form.limitations = ''
+  form.chatflow_id = ''
   selectedKbIds.value = []
   useAllKnowledgeBases.value = true
   editorOpen.value = true
@@ -166,6 +189,12 @@ async function save() {
     welcome_message: form.welcome_message.trim() || null,
     system_prompt: form.system_prompt.trim() || null,
     recommended_questions: form.recommended_questions.split('\n').map((item) => item.trim()).filter(Boolean),
+    answer_template: form.answer_template,
+    internet_enabled: form.internet_enabled,
+    no_answer_policy: form.no_answer_policy,
+    capabilities: form.capabilities.split('\n').map((item) => item.trim()).filter(Boolean),
+    limitations: form.limitations.split('\n').map((item) => item.trim()).filter(Boolean),
+    chatflow_id: form.chatflow_id || null,
   }
   try {
     let item: AssistantRecord
@@ -313,6 +342,42 @@ onMounted(refresh)
             <span class="assistant-hint">提示词必须约束助手只依据内部资料并给出 [n] 引用，不允许绕过知识库或权限过滤。</span>
           </label>
           <button type="button" class="secondary-action" style="width:fit-content" @click="useDefaultPrompt">填入安全默认模板</button>
+
+          <div class="two-col">
+            <label class="form-row">默认答案模板
+              <select v-model="form.answer_template">
+                <option value="AUTO">自动识别问题类型</option>
+                <option value="POLICY">制度：结论/适用范围/办理步骤/注意事项</option>
+                <option value="TECHNICAL">技术：结论/实施步骤/代码或命令/风险</option>
+                <option value="PROGRESS">项目进度：时间线/状态/阻塞/下一步</option>
+                <option value="COMPARISON">对比：对比表格/差异/建议</option>
+                <option value="SUMMARY">汇总：主题归类/关键结论/引用来源</option>
+                <option value="GENERAL">通用：直接结论/依据/补充说明</option>
+              </select>
+            </label>
+            <label class="form-row">无答案策略
+              <select v-model="form.no_answer_policy">
+                <option value="SUGGEST">提示并推荐资料</option>
+                <option value="STRICT">严格：只给固定提示</option>
+                <option value="GENERAL">允许通用知识补充</option>
+              </select>
+            </label>
+          </div>
+          <label class="form-row">绑定流程
+            <select v-model="form.chatflow_id">
+              <option value="">内置默认流程</option>
+              <option v-for="flow in chatflows" :key="flow.id" :value="flow.id">{{ flow.name }}（已发布 v{{ flow.published_version }}）</option>
+            </select>
+            <span class="assistant-hint">助手问答时按所选流程的节点开关执行；未选择时使用内置默认流程。</span>
+          </label>
+          <label class="capability-option">
+            <input v-model="form.internet_enabled" type="checkbox">
+            <span><strong>允许联网</strong><small>为后续联网检索预留的开关；当前版本仅记录策略，不发起联网请求。</small></span>
+          </label>
+          <div class="two-col">
+            <label class="form-row">能做什么（每行一条）<textarea v-model="form.capabilities" rows="3" placeholder="例如：结合技术文档给出实施步骤"></textarea></label>
+            <label class="form-row">不能做什么（每行一条）<textarea v-model="form.limitations" rows="3" placeholder="例如：不提供法律意见"></textarea></label>
+          </div>
 
           <div>
             <p class="assistant-hint" style="margin:0 0 6px">知识库范围（空 = 全部启用的知识库）</p>

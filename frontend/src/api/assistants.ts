@@ -1,6 +1,6 @@
 import { ApiError } from './documents'
 import type { ApiErrorBody } from '../types/documents'
-import type { AssistantListResponse, AssistantRecord } from '../types/assistant'
+import type { AssistantListResponse, AssistantRecord, AssistantWelcome } from '../types/assistant'
 
 async function parse<T>(response: Response): Promise<T> {
   if (response.ok) return response.json()
@@ -15,6 +15,9 @@ export const listAssistants = async (enabled?: boolean): Promise<AssistantListRe
 
 export const getAssistant = async (id: string): Promise<AssistantRecord> =>
   parse(await fetch(`/api/assistants/${id}`))
+
+export const getAssistantWelcome = async (id: string): Promise<AssistantWelcome> =>
+  parse(await fetch(`/api/assistants/${id}/welcome`))
 
 export interface AssistantUpsertInput {
   name?: string
@@ -33,6 +36,12 @@ export interface AssistantUpsertInput {
   retrieval_limit?: number
   temperature?: number
   recommended_questions?: string[]
+  answer_template?: string
+  internet_enabled?: boolean
+  no_answer_policy?: string
+  capabilities?: string[]
+  limitations?: string[]
+  chatflow_id?: string | null
   enabled?: boolean
 }
 

@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, inject, ref, watch } from 'vue'
+import { computed, inject, onMounted, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 import { listChunks } from '../../api/chunks'
 import {
-  ApiError, getAclReferences, getDocumentAcl, listDocumentVersions, reprocessDocument,
-  setDocumentAccess, setDocumentExternalPolicy, updateDocument,
+  ApiError, getAclReferences, getDocumentAcl, listDocumentVersions, previewDocumentChunks,
+  reprocessDocument, setDocumentAccess, setDocumentExternalPolicy, updateDocument,
 } from '../../api/documents'
-import type { AclEntry, AclItem, AclReferences } from '../../api/documents'
+import type { AclEntry, AclItem, AclReferences, ChunkPreviewItem } from '../../api/documents'
 import type { AuthUser } from '../../api/auth'
 import type { DocumentChunk, DocumentRecord } from '../../types/documents'
 import type { KnowledgeBaseRecord } from '../../types/knowledgeBases'
@@ -46,6 +46,16 @@ const roles = ref<AclReferences['roles']>([])
 const users = ref<AclReferences['users']>([])
 const sensitivity = ref(props.document.sensitivity_level || 'INTERNAL')
 const externalAllowed = ref(props.document.external_llm_allowed)
+
+// P2-6 文档理解元数据与切片预览。
+const author = ref(props.document.author ?? '')
+const topic = ref(props.document.topic ?? '')
+const departmentId = ref(props.document.department_id ?? '')
+const relatedDocs = ref((props.document.related_document_ids ?? []).join(','))
+const validFrom = ref(props.document.valid_from ? props.document.valid_from.slice(0, 10) : '')
+const validUntil = ref(props.document.valid_until ? props.document.valid_until.slice(0, 10) : '')
+const chunkPreview = ref<ChunkPreviewItem[]>([])
+const previewLoading = ref(false)
 
 const VISIBILITY_LABELS: Record<string, string> = {
   COMPANY: '全公司可见',
@@ -93,10 +103,32 @@ async function load() {
 
 async function saveOverview() {
   try {
-    await updateDocument(props.document.id, { knowledge_base_id: targetBase.value, tags: tags.value.split(',').map((x) => x.trim()).filter(Boolean) })
+    await updateDocument(props.document.id, {
+      knowledge_base_id: targetBase.value,
+      tags: tags.value.split(',').map((x) => x.trim()).filter(Boolean),
+      author: author.value.trim() || null,
+      topic: topic.value.trim() || null,
+      department_id: departmentId.value || null,
+      related_document_ids: relatedDocs.value.split(/[,，;；\s]+/).map((x) => x.trim()).filter(Boolean),
+      valid_from: validFrom.value ? `${validFrom.value}T00:00:00Z` : null,
+      valid_until: validUntil.value ? `${validUntil.value}T00:00:00Z` : null,
+    })
     emit('changed')
   } catch (reason) {
     error.value = errorMessage(reason, '保存失败')
+  }
+}
+
+async function previewChunks() {
+  previewLoading.value = true
+  error.value = ''
+  try {
+    const result = await previewDocumentChunks(props.document.id, { limit: 30 })
+    chunkPreview.value = result.items
+  } catch (reason) {
+    error.value = errorMessage(reason, '预览切片失败')
+  } finally {
+    previewLoading.value = false
   }
 }
 
@@ -212,9 +244,18 @@ watch(() => props.document.id, () => {
   externalAllowed.value = props.document.external_llm_allowed
   tags.value = props.document.tags.join(',')
   targetBase.value = props.document.knowledge_base_id
+  author.value = props.document.author ?? ''
+  topic.value = props.document.topic ?? ''
+  departmentId.value = props.document.department_id ?? ''
+  relatedDocs.value = (props.document.related_document_ids ?? []).join(',')
+  validFrom.value = props.document.valid_from ? props.document.valid_from.slice(0, 10) : ''
+  validUntil.value = props.document.valid_until ? props.document.valid_until.slice(0, 10) : ''
+  chunkPreview.value = []
   load()
 }, { immediate: true })
 watch(page, load)
+
+onMounted(() => { if (canManage.value) void loadAccessReferences() })
 </script>
 
 <template>
@@ -243,8 +284,30 @@ watch(page, load)
         <div v-if="canManage" class="governance-form">
           <label>知识库<select v-model="targetBase"><option v-for="item in knowledgeBases.filter((x) => x.enabled)" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
           <label>标签<input v-model="tags" placeholder="使用逗号分隔"></label>
+          <label>作者<input v-model="author" placeholder="可选"></label>
+          <label>主题<input v-model="topic" placeholder="可选"></label>
+          <label>部门<select v-model="departmentId"><option value="">未指定</option><option v-for="item in departments" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
+          <label>关联文档<input v-model="relatedDocs" placeholder="文档 ID，逗号分隔"></label>
+          <label>生效时间<input v-model="validFrom" type="date"></label>
+          <label>失效时间<input v-model="validUntil" type="date"></label>
           <button @click="saveOverview">保存资料设置</button>
           <button @click="reprocess">重新处理</button>
+          <button type="button" class="secondary-action" :disabled="previewLoading" @click="previewChunks">{{ previewLoading ? '解析中…' : '预览切片效果' }}</button>
+        </div>
+        <div v-if="chunkPreview.length" class="chunk-preview">
+          <p class="assistant-hint">切片预览（共 {{ chunkPreview.length }} 条，未写入索引）</p>
+          <ol class="chunk-preview-list">
+            <li v-for="item in chunkPreview" :key="item.sequence_number">
+              <div class="chunk-meta">
+                <strong>#{{ item.sequence_number }}</strong>
+                <span>{{ item.length }} 字</span>
+                <span v-if="item.section_path.length">{{ item.section_path.join(' / ') }}</span>
+                <span v-if="item.chunk_role !== 'normal'">{{ item.chunk_role === 'parent' ? '父片段' : '子片段' }}</span>
+                <span>{{ item.block_type }}</span>
+              </div>
+              <pre>{{ item.content }}</pre>
+            </li>
+          </ol>
         </div>
       </section>
 

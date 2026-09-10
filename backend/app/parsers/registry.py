@@ -15,9 +15,9 @@ class ParserRegistry:
     def __init__(self, ocr: OcrEngine):
         self.parsers: dict[str, DocumentParser] = {
             "pdf": PdfParser(ocr),
-            "docx": DocxParser(),
-            "xlsx": XlsxParser(),
-            "pptx": PptxParser(),
+            "docx": DocxParser(ocr),
+            "xlsx": XlsxParser(ocr),
+            "pptx": PptxParser(ocr),
             "txt": TextParser(),
             "md": TextParser(markdown=True),
             "csv": CsvParser(),

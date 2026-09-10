@@ -33,6 +33,16 @@ class Settings(BaseSettings):
     search_feedback_min_samples: int = 5
     search_feedback_max_boost: float = 0.05
     search_synonyms: str = "k8s|kubernetes|容器编排;气泡项目|气泡检测|bubble;日报|工作记录|周报"
+    # P2-1 检索准确性：Query Rewrite / 上下文补全 / Multi-query / 中文词典 / 拼写纠正。
+    # 默认关闭 LLM 改写与多查询，避免改变既有行为与延迟；管理员可在检索配置版本中开启。
+    query_rewrite_enabled: bool = False
+    query_rewrite_model: str = ""
+    context_completion_enabled: bool = False
+    context_history_turns: int = 3
+    multi_query_enabled: bool = False
+    multi_query_count: int = 3
+    dictionary_enabled: bool = True
+    spelling_correction_enabled: bool = True
     rerank_enabled: bool = False
     rerank_model: str = "BAAI/bge-reranker-v2-m3"
     rerank_candidate_limit: int = 20
@@ -53,6 +63,9 @@ class Settings(BaseSettings):
     rag_source_limit: int = 6
     rag_history_turns: int = 6
     rag_max_context_chars: int = 18_000
+    # P2-5 推荐追问：默认用启发式生成，避免每次问答额外调用大模型；可开启 LLM 生成。
+    follow_up_enabled: bool = True
+    follow_up_llm_enabled: bool = False
     # 相同问题在资料版本与检索配置未变化时可命中内存回答缓存；关闭可节省内存。
     answer_cache_enabled: bool = True
     answer_cache_size: int = 48

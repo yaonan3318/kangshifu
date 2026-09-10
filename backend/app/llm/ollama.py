@@ -86,10 +86,10 @@ class OllamaClient:
             if item["delta"]:
                 yield item["delta"]
 
-    async def complete_json(self, messages: list[GenerationMessage]) -> dict:
-        """要求 Ollama 返回单个 JSON 对象，供 Harness 解析工具决策。"""
+    async def complete_json(self, messages: list[GenerationMessage], model: str | None = None) -> dict:
+        """要求 Ollama 返回单个 JSON 对象，供 Harness 解析工具决策与查询改写使用。"""
         payload = {
-            "model": self.settings.ollama_model,
+            "model": model or self.settings.ollama_model,
             "messages": [message.model_dump() for message in messages],
             "stream": False, "format": "json", "think": False,
             "keep_alive": self.settings.ollama_keep_alive,

@@ -29,6 +29,12 @@ function statusText(): string {
         <span v-else class="is-stale">{{ statusText() }}，以下为回答时的历史快照</span>
         <span v-if="source.score != null">相关度 {{ (source.score * 100).toFixed(1) }}%</span>
         <span>{{ source.location_text }}</span>
+        <span v-if="source.version_number != null">文档版本 v{{ source.version_number }}</span>
+        <span v-if="source.extension">{{ source.extension.toUpperCase() }}</span>
+      </div>
+
+      <div v-if="source.matched_keywords && source.matched_keywords.length" class="reference-keywords">
+        命中关键词：<span v-for="keyword in source.matched_keywords" :key="keyword">{{ keyword }}</span>
       </div>
 
       <div class="reference-actions">
@@ -38,6 +44,11 @@ function statusText(): string {
           class="secondary-action"
           @click="emit('openDocument', source.document_id)"
         >在资料库打开文档</button>
+        <a
+          v-if="source.can_download"
+          class="secondary-action"
+          :href="`/api/documents/${source.document_id}/download`"
+        >下载原文件</a>
       </div>
 
       <h3 class="reference-heading">回答时引用的内容</h3>

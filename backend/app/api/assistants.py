@@ -9,12 +9,17 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_session
 from app.errors import AppError
-from app.models import DEFAULT_ASSISTANT_ID, Assistant, KnowledgeBase, assistant_knowledge_bases
+from app.models import (
+    DEFAULT_ASSISTANT_ID, Assistant, Chatflow, ChatMessage, ChatMessageRole, ChatSession,
+    KnowledgeBase, assistant_knowledge_bases,
+)
 from app.schemas.assistant import (
     AssistantKnowledgeBasesPut, AssistantListResponse, AssistantOut, AssistantUpsert,
+    AssistantWelcomeResponse,
 )
 from app.api.auth import current_user
 from app.services.audit import audit_action
+from app.services.permissions import require_user
 from app.services.rbac import require_permission
 
 router = APIRouter(prefix="/api/assistants", tags=["assistants"])
@@ -40,6 +45,10 @@ def _assistant_payload(assistant: Assistant) -> AssistantOut:
         harness_context=assistant.harness_context, harness_namespace=assistant.harness_namespace,
         retrieval_limit=assistant.retrieval_limit, temperature=assistant.temperature,
         recommended_questions=list(assistant.recommended_questions or []),
+        answer_template=assistant.answer_template, internet_enabled=assistant.internet_enabled,
+        no_answer_policy=assistant.no_answer_policy,
+        capabilities=list(assistant.capabilities or []), limitations=list(assistant.limitations or []),
+        chatflow_id=assistant.chatflow_id,
         enabled=assistant.enabled, created_at=assistant.created_at, updated_at=assistant.updated_at,
         knowledge_base_ids=[kb.id for kb in assistant.knowledge_bases],
     )
@@ -54,10 +63,17 @@ def _load(session: Session, assistant_id: uuid.UUID) -> Assistant:
     return assistant
 
 
+def _validate_chatflow(session: Session, chatflow_id: uuid.UUID | None) -> None:
+    if chatflow_id is not None and session.get(Chatflow, chatflow_id) is None:
+        raise AppError("CHATFLOW_NOT_FOUND", "指定的流程不存在", 404)
+
+
 def _apply(session: Session, assistant: Assistant, body: AssistantUpsert) -> Assistant:
     values = body.model_dump(exclude_unset=True)
+    if values.get("chatflow_id") is not None:
+        _validate_chatflow(session, values["chatflow_id"])
     for key, value in values.items():
-        if key == "recommended_questions" and value is not None:
+        if key in ("recommended_questions", "capabilities", "limitations") and value is not None:
             value = [str(item).strip() for item in value if str(item).strip()]
         elif key == "harness_namespace":
             value = (value or "default").strip()
@@ -100,8 +116,10 @@ def create_assistant(
     ) as audit:
         if session.scalar(select(Assistant).where(Assistant.name == name)) is not None:
             raise AppError("ASSISTANT_NAME_EXISTS", "已存在同名助手", 409)
+        _validate_chatflow(session, body.chatflow_id)
         assistant = Assistant(
             name=name,
+            chatflow_id=body.chatflow_id,
             description=body.description,
             avatar=body.avatar or "康",
             welcome_message=body.welcome_message,
@@ -117,6 +135,11 @@ def create_assistant(
             retrieval_limit=body.retrieval_limit or 6,
             temperature=0.2 if body.temperature is None else body.temperature,
             recommended_questions=[str(q) for q in (body.recommended_questions or [])],
+            answer_template=body.answer_template or "AUTO",
+            internet_enabled=bool(body.internet_enabled),
+            no_answer_policy=body.no_answer_policy or "SUGGEST",
+            capabilities=[str(item).strip() for item in (body.capabilities or []) if str(item).strip()],
+            limitations=[str(item).strip() for item in (body.limitations or []) if str(item).strip()],
             enabled=True if body.enabled is None else body.enabled,
         )
         session.add(assistant)
@@ -133,6 +156,46 @@ def get_assistant(
     session: Annotated[Session, Depends(get_session)],
 ) -> AssistantOut:
     return _assistant_payload(_load(session, assistant_id))
+
+
+@router.get("/{assistant_id}/welcome", response_model=AssistantWelcomeResponse)
+def assistant_welcome(
+    assistant_id: uuid.UUID,
+    request: Request,
+    session: Annotated[Session, Depends(get_session)],
+) -> AssistantWelcomeResponse:
+    """助手欢迎页：能做什么/不能做什么、知识库范围、是否允许通用知识与运维、最近热门问题。"""
+    user = require_user(current_user(request))
+    assistant = _load(session, assistant_id)
+    if assistant.knowledge_bases:
+        bases = [{"id": str(kb.id), "name": kb.name} for kb in assistant.knowledge_bases]
+        scope = "、".join(kb.name for kb in assistant.knowledge_bases)
+    else:
+        enabled = list(session.scalars(
+            select(KnowledgeBase).where(KnowledgeBase.enabled.is_(True)).order_by(KnowledgeBase.name)
+        ))
+        bases = [{"id": str(kb.id), "name": kb.name} for kb in enabled]
+        scope = "全部启用知识库"
+    recent = session.execute(
+        select(ChatMessage.content)
+        .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+        .where(ChatSession.assistant_id == assistant_id, ChatMessage.role == ChatMessageRole.USER)
+        .group_by(ChatMessage.content)
+        .order_by(func.count(ChatMessage.id).desc(), func.max(ChatMessage.created_at).desc())
+        .limit(5)
+    ).all()
+    return AssistantWelcomeResponse(
+        id=assistant.id, name=assistant.name, avatar=assistant.avatar,
+        description=assistant.description, welcome_message=assistant.welcome_message,
+        capabilities=list(assistant.capabilities or []),
+        limitations=list(assistant.limitations or []),
+        recommended_questions=list(assistant.recommended_questions or []),
+        recent_questions=[row[0] for row in recent if row[0]],
+        knowledge_bases=bases, knowledge_scope=scope,
+        general_knowledge_allowed=bool(assistant.use_deepseek_allowed and assistant.deepseek_enabled),
+        operations_allowed=bool(assistant.harness_enabled and user.is_super_admin),
+        internet_enabled=assistant.internet_enabled,
+    )
 
 
 @router.patch("/{assistant_id}", response_model=AssistantOut)

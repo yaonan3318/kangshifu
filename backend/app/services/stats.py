@@ -7,10 +7,85 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     AnswerFeedback, ChatMessage, ChatMessageRole, ChatMessageSource, ChatMessageStatus,
-    ChatSession, Document, DocumentStatus, FeedbackRating, ProcessingJob, JobStatus,
+    ChatSession, Document, DocumentChunk, DocumentStatus, FeedbackRating, JobStatus,
+    KnowledgeBase, KnowledgeGap, KnowledgeGapStatus, ProcessingJob,
 )
 
 NO_INTERNAL_ANSWER = "公司资料库中没有找到能够回答这个问题的内部资料。"
+
+
+def compute_dashboard(session: Session) -> dict:
+    """首页/比赛演示用的聚合数据；只包含汇总计数，不含任何用户隐私明细。"""
+    since = _cutoff(30)
+    today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    knowledge_base_count = session.scalar(
+        select(func.count()).select_from(KnowledgeBase).where(KnowledgeBase.enabled.is_(True))
+    ) or 0
+    document_count = session.scalar(
+        select(func.count()).select_from(Document).where(Document.deleted_at.is_(None))
+    ) or 0
+    chunk_count = session.scalar(
+        select(func.count()).select_from(DocumentChunk)
+        .join(Document, DocumentChunk.document_id == Document.id)
+        .where(Document.deleted_at.is_(None), DocumentChunk.enabled.is_(True))
+    ) or 0
+    questions_today = session.scalar(
+        select(func.count()).select_from(ChatMessage).where(
+            ChatMessage.role == ChatMessageRole.USER, ChatMessage.created_at >= today_start,
+        )
+    ) or 0
+
+    answers = session.scalars(select(ChatMessage).where(
+        ChatMessage.role == ChatMessageRole.ASSISTANT,
+        ChatMessage.status == ChatMessageStatus.COMPLETED,
+        ChatMessage.created_at >= since,
+    )).all()
+    totals = [float(item.metrics["total_ms"]) for item in answers if (item.metrics or {}).get("total_ms") is not None]
+    with_sources = session.scalars(
+        select(ChatMessageSource.message_id).where(
+            ChatMessageSource.message_id.in_([item.id for item in answers])
+        ).distinct()
+    ).all() if answers else []
+    source_message_ids = set(with_sources)
+    cited = sum(1 for item in answers if item.id in source_message_ids)
+    citation_coverage = round(cited / len(answers), 3) if answers else None
+
+    feedback_rows = session.execute(
+        select(AnswerFeedback.rating, func.count(AnswerFeedback.id))
+        .where(AnswerFeedback.created_at >= since).group_by(AnswerFeedback.rating)
+    ).all()
+    counts = {rating.value: count for rating, count in feedback_rows}
+    total_feedback = sum(counts.values())
+    satisfaction = round(counts.get("UP", 0) / total_feedback, 3) if total_feedback else None
+
+    hot_rows = session.execute(
+        select(ChatMessage.content, func.count(ChatMessage.id))
+        .where(ChatMessage.role == ChatMessageRole.USER, ChatMessage.created_at >= since)
+        .group_by(ChatMessage.content)
+        .order_by(func.count(ChatMessage.id).desc()).limit(8)
+    ).all()
+    hot_questions = [{"question": " ".join(str(row[0]).split())[:120], "count": row[1]} for row in hot_rows]
+
+    gap_count = session.scalar(
+        select(func.count()).select_from(KnowledgeGap).where(
+            KnowledgeGap.status.in_([KnowledgeGapStatus.OPEN, KnowledgeGapStatus.ASSIGNED])
+        )
+    ) or 0
+
+    return {
+        "knowledge_base_count": knowledge_base_count,
+        "document_count": document_count,
+        "chunk_count": chunk_count,
+        "questions_today": questions_today,
+        "answers_30d": len(answers),
+        "avg_response_ms": round(sum(totals) / len(totals), 1) if totals else None,
+        "citation_coverage": citation_coverage,
+        "satisfaction": satisfaction,
+        "feedback": {"total": total_feedback, "up": counts.get("UP", 0), "down": counts.get("DOWN", 0)},
+        "hot_questions": hot_questions,
+        "knowledge_gap_count": gap_count,
+    }
 
 
 def _cutoff(days: int) -> datetime:

@@ -13,7 +13,7 @@ from app.config import Settings, get_settings
 from app.db import get_session
 from app.models import Department, DocumentAcl, DocumentVisibility, Role, User
 from app.models.document import DocumentStatus
-from app.schemas.documents import DocumentChunkResponse, DocumentContentResponse, DocumentDeleteRequest, DocumentExternalPolicyRequest, DocumentFilters, DocumentListResponse, DocumentResponse, DocumentUpdateRequest
+from app.schemas.documents import ChunkPreviewItem, ChunkPreviewRequest, ChunkPreviewResponse, DocumentChunkResponse, DocumentContentResponse, DocumentDeleteRequest, DocumentExternalPolicyRequest, DocumentFilters, DocumentListResponse, DocumentResponse, DocumentUpdateRequest
 from app.services.audit import audit_action
 from app.services.documents import DocumentService
 from app.services.managed_storage import ManagedStorage
@@ -185,6 +185,27 @@ def restore_document(document_id: uuid.UUID, request: Request, service: Annotate
     ):
         document = service.restore(document_id)
     return document_response(document, service)
+
+
+@router.post("/{document_id}/chunk-preview", response_model=ChunkPreviewResponse)
+def preview_document_chunks(
+    document_id: uuid.UUID,
+    body: ChunkPreviewRequest,
+    request: Request,
+    service: Annotated[DocumentService, Depends(get_document_service)],
+) -> ChunkPreviewResponse:
+    """按切片策略预览切片效果，不写入数据库；可临时覆盖知识库配置。"""
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_MANAGE)
+    chunks, total, config = service.preview_chunks(document_id, body.chunking_config, body.limit)
+    return ChunkPreviewResponse(
+        items=[ChunkPreviewItem(
+            sequence_number=index, content=chunk.content, length=len(chunk.content),
+            page_start=chunk.page_start, page_end=chunk.page_end, slide_number=chunk.slide_number,
+            sheet_name=chunk.sheet_name, row_start=chunk.row_start, row_end=chunk.row_end,
+            section_path=chunk.section_path, block_type=chunk.block_type, chunk_role=chunk.chunk_role,
+        ) for index, chunk in enumerate(chunks, start=1)],
+        total=total, config=config.to_dict(),
+    )
 
 
 @router.get("/{document_id}/versions", response_model=list[DocumentResponse])

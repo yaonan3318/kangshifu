@@ -6,11 +6,13 @@ import DepartmentAdmin from './DepartmentAdmin.vue'
 import RoleAdmin from './RoleAdmin.vue'
 import AuditAdmin from './AuditAdmin.vue'
 import AssistantManager from '../assistants/AssistantManager.vue'
+import ChatflowManager from '../assistants/ChatflowManager.vue'
 import FeedbackAdmin from '../feedback/FeedbackAdmin.vue'
 import StatsAdmin from '../stats/StatsAdmin.vue'
+import KnowledgeGapAdmin from '../stats/KnowledgeGapAdmin.vue'
 import { hasPermission, type PermissionCode } from '../../utils/permissions'
 
-type TabKey = 'users' | 'departments' | 'roles' | 'assistants' | 'feedback' | 'audit' | 'stats'
+type TabKey = 'users' | 'departments' | 'roles' | 'assistants' | 'chatflows' | 'feedback' | 'gaps' | 'audit' | 'stats'
 const LAST_SYSTEM_TAB_PREFIX = 'company-search:last-system-tab:'
 
 const tab = ref<TabKey>('users')
@@ -29,7 +31,9 @@ const tabs: TabDef[] = [
   { key: 'departments', label: '部门', component: DepartmentAdmin, permission: 'IDENTITY_MANAGE' },
   { key: 'roles', label: '角色', component: RoleAdmin, permission: 'IDENTITY_MANAGE' },
   { key: 'assistants', label: '助手', component: AssistantManager, permission: 'ASSISTANT_MANAGE' },
+  { key: 'chatflows', label: '流程', component: ChatflowManager, permission: 'ASSISTANT_MANAGE' },
   { key: 'feedback', label: '反馈', component: FeedbackAdmin, superOnly: true },
+  { key: 'gaps', label: '知识缺口', component: KnowledgeGapAdmin, permission: 'STATS_VIEW' },
   { key: 'audit', label: '审计', component: AuditAdmin, permission: 'AUDIT_VIEW' },
   { key: 'stats', label: '统计', component: StatsAdmin, permission: 'STATS_VIEW' },
 ]

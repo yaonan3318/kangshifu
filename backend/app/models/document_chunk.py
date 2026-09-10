@@ -27,6 +27,9 @@ class DocumentChunk(Base):
     row_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
     row_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
     section_path: Mapped[list[str]] = mapped_column(ARRAY(String(512)), default=list)
+    # P2-6：父子切片时标记角色与父片段序号，供后续父级扩展检索使用。
+    chunk_role: Mapped[str] = mapped_column(String(16), default="normal", server_default="normal", index=True)
+    parent_sequence_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     content: Mapped[str] = mapped_column(Text)
     original_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)

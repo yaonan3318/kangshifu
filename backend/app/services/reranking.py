@@ -19,11 +19,16 @@ class Reranker:
     def __init__(self, settings: Settings):
         self.settings = settings
 
-    def rerank(self, query: str, texts: list[str]) -> RerankOutcome:
-        if not self.settings.rerank_enabled or not texts:
+    def rerank(
+        self, query: str, texts: list[str],
+        enabled: bool | None = None, model: str | None = None,
+    ) -> RerankOutcome:
+        if enabled is None:
+            enabled = self.settings.rerank_enabled
+        if not enabled or not texts:
             return RerankOutcome(None)
         try:
-            model = _load_reranker(self.settings.rerank_model, str(self.settings.models_root))
+            model = _load_reranker(model or self.settings.rerank_model, str(self.settings.models_root))
             raw = model.predict(
                 [(query, text[: self.settings.rerank_max_chars]) for text in texts],
                 batch_size=self.settings.rerank_batch_size,

@@ -1081,3 +1081,95 @@ progress::-webkit-progress-value { background: #3972bf; }
 .permission-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 8px 14px; }
 .permission-options label { display: inline-flex; align-items: center; gap: 8px; color: #40516a; font-size: 13px; cursor: pointer; }
 .permission-options input { width: 16px; height: 16px; margin: 0; accent-color: var(--brand); }
+
+/* P2-0 质量基线：评测集、配置版本与运行对比 */
+.eval-set-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.eval-set-tabs button { border: 1px solid #cad3c7; border-radius: 999px; background: #fff; color: #3f6141; padding: 7px 13px; cursor: pointer; }
+.eval-set-tabs button.active { background: #e6eee3; color: #263a27; font-weight: 700; }
+.import-row { display: inline-flex; align-items: center; gap: 10px; margin: 8px 0 16px; color: #5b6559; font-size: 13px; }
+.config-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px; align-items: start; }
+.config-form { display: grid; gap: 10px; }
+.config-form label { display: grid; gap: 6px; color: #5b6559; font-size: 12px; }
+.config-form input, .config-form textarea, .config-diff select, .run-controls select, .run-controls input[type=number] { border: 1px solid #d2d9cf; border-radius: 9px; background: #fff; padding: 8px 11px; font: inherit; }
+.config-form textarea { resize: vertical; font: 13px/1.6 ui-monospace, monospace; }
+.config-form button { border: 0; border-radius: 9px; background: #263a27; color: #fff; padding: 10px 14px; cursor: pointer; }
+.config-diff { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 14px 0; }
+.config-diff button { border: 1px solid #cad3c7; border-radius: 8px; background: #fff; color: #3f6141; padding: 8px 12px; cursor: pointer; }
+.run-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.delta-up { color: #2f7d3a; font-weight: 700; }
+.delta-down { color: #a5473f; font-weight: 700; }
+@media (max-width: 900px) { .config-grid { grid-template-columns: 1fr; } }
+
+/* P2-1 检索准确性：改写展示与词典 */
+.query-rewrite-box { padding: 12px 14px; margin: 12px 0; border: 1px solid #d8e3d6; border-radius: 12px; background: #f4f8f2; }
+.query-rewrite-box dl { display: grid; gap: 6px; margin: 0; }
+.query-rewrite-box dl > div { display: grid; grid-template-columns: 120px 1fr; gap: 10px; }
+.query-rewrite-box dt { color: #6a7568; font-size: 12px; }
+.query-rewrite-box dd { margin: 0; color: #2f3d30; font-size: 13px; overflow-wrap: anywhere; }
+.retrieval-query-note { margin: 8px 0 0; padding: 8px 11px; border-radius: 9px; background: #eef4ec; color: #3f5a41; font-size: 12px; overflow-wrap: anywhere; }
+.config-quick { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+.config-quick label { display: inline-flex; align-items: center; gap: 6px; color: #40516a; font-size: 12px; }
+.config-quick input[type=number] { width: 72px; border: 1px solid #d2d9cf; border-radius: 8px; padding: 5px 8px; font: inherit; }
+
+/* P2-2 回答可靠性：置信度、引用校验、无答案处理与可追溯引用 */
+.confidence-badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+.conf-high { background: #e3f3e6; color: #2f7d3a; }
+.conf-medium { background: #fdf1d8; color: #9a6b12; }
+.conf-insufficient { background: #fbe4e1; color: #a5473f; }
+.citation-check-note { display: grid; gap: 4px; margin: 8px 0; padding: 9px 12px; border-radius: 9px; background: #fff3d9; color: #79531a; font-size: 12px; }
+.no-answer-panel { display: grid; gap: 10px; margin: 10px 0; padding: 14px; border: 1px solid #e3d3c7; border-radius: 12px; background: #fdf7f0; }
+.no-answer-message { margin: 0; color: #6b4a2f; font-weight: 600; }
+.no-answer-block strong { display: block; margin-bottom: 4px; color: #6b5540; font-size: 12px; }
+.no-answer-block ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; color: #5b6559; font-size: 13px; }
+.no-answer-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.link-button { border: 0; background: none; color: #2d68bd; padding: 0; cursor: pointer; font: inherit; text-align: left; }
+.link-button:hover { text-decoration: underline; }
+.reference-keywords { margin: 8px 0; color: #5b6559; font-size: 12px; }
+.reference-keywords span { display: inline-block; margin: 2px 6px 2px 0; padding: 2px 8px; border-radius: 999px; background: #eef4ec; color: #3f5a41; }
+
+/* P2-3 助手角色增强：欢迎页能力与限制 */
+.welcome-capabilities { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; width: min(820px, 100%); margin-top: 18px; text-align: left; }
+.welcome-cap-block { padding: 14px 16px; border: 1px solid #e2e7e1; border-radius: 12px; background: var(--surface-soft); }
+.welcome-cap-block strong { display: block; margin-bottom: 6px; color: #33453a; font-size: 13px; }
+.welcome-cap-block ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; color: #5b6559; font-size: 13px; }
+.welcome-cap-block p { margin: 0 0 4px; color: #5b6559; font-size: 13px; }
+
+/* P2-4 轻量 Chatflow：固定画布 */
+.chatflow-layout { display: grid; grid-template-columns: 320px 1fr; gap: 18px; align-items: start; }
+.chatflow-list .governance-list li.selected { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand) inset; }
+.chatflow-nodes { display: grid; gap: 12px; margin: 14px 0; }
+.chatflow-node { padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.chatflow-node.disabled { opacity: .55; background: var(--surface-soft); }
+.chatflow-node header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.chatflow-node .node-type { padding: 3px 9px; border-radius: 999px; background: var(--brand-soft); color: var(--brand); font-size: 12px; font-weight: 700; }
+.chatflow-node .node-name { width: 100%; border: 1px solid #d2d9cf; border-radius: 8px; padding: 7px 10px; font: inherit; }
+.chatflow-node .node-next { margin: 6px 0; color: #6a7568; font-size: 12px; }
+.chatflow-node .node-config { margin-top: 6px; }
+.chatflow-node .node-branches { display: grid; gap: 3px; margin: 4px 0 0; padding-left: 18px; color: #5b6559; font-size: 12px; }
+.node-output { max-width: 320px; overflow-wrap: anywhere; font-size: 12px; color: #5b6559; }
+.chatflow-versions, .chatflow-debug { margin-top: 20px; padding-top: 14px; border-top: 1px dashed var(--line); }
+@media (max-width: 900px) { .chatflow-layout { grid-template-columns: 1fr; } }
+
+/* P2-5 用户体验：推荐追问、知识缺口与打印导出 */
+.follow-up-suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 4px; }
+.follow-up-suggestions > span { color: #6a7568; font-size: 12px; }
+.gap-question { max-width: 360px; overflow-wrap: anywhere; }
+.rerun-text { max-height: 260px; overflow: auto; margin: 6px 0 0; padding: 10px 12px; border-radius: 9px; background: var(--surface-soft); white-space: pre-wrap; font: 13px/1.6 ui-monospace, monospace; }
+@media print {
+  body.printing-answer .app-header,
+  body.printing-answer .session-sidebar,
+  body.printing-answer .qa-topbar,
+  body.printing-answer .qa-composer,
+  body.printing-answer .answer-actions,
+  body.printing-answer .feedback-bar,
+  body.printing-answer .follow-up-suggestions,
+  body.printing-answer .qa-turn:not(:last-of-type) { display: none !important; }
+}
+
+/* P2-6 文档理解：切片配置与预览 */
+.kb-chunking-editor { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line); }
+.chunk-preview { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.chunk-preview-list { display: grid; gap: 10px; margin: 8px 0 0; padding: 0; list-style: none; }
+.chunk-preview-list li { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+.chunk-preview-list .chunk-meta { display: flex; flex-wrap: wrap; gap: 10px; color: #6a7568; font-size: 12px; margin-bottom: 6px; }
+.chunk-preview-list pre { max-height: 200px; overflow: auto; margin: 0; white-space: pre-wrap; color: #3d4a3e; font: 13px/1.6 ui-monospace, monospace; }

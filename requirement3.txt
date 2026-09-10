@@ -1,0 +1,309 @@
+P1剩余开发清单
+1. 功能级RBAC数据模型
+新增固定权限码：
+ANSWER_USE
+SEARCH_USE
+DOCUMENT_VIEW
+DOCUMENT_UPLOAD
+DOCUMENT_MANAGE
+KNOWLEDGE_BASE_MANAGE
+RETRIEVAL_LAB_USE
+ASSISTANT_MANAGE
+IDENTITY_MANAGE
+AUDIT_VIEW
+STATS_VIEW
+HARNESS_USE
+数据库新增：
+permissions
+- code，字符串主键
+- name
+- description
+- category
+- sort_order
+
+role_permissions
+- role_id
+- permission_code
+- 联合唯一约束
+要求：
+- 一个角色可以绑定多个权限。
+- 一个用户可以拥有多个角色。
+- 用户最终权限为所有启用角色权限的并集。
+- 停用角色后，其功能权限立即失效。
+- is_super_admin=true 自动拥有全部权限。
+- 不删除现有 user_roles 和文档ACL。
+- 新增线性Alembic迁移，例如 0018_function_rbac.py。
+- 必须提供完整 downgrade()。
+- 不清空现有用户、角色、资料和权限数据。
+2. 默认角色
+迁移或初始化程序幂等创建以下角色：
+默认角色	权限
+普通员工	ANSWER_USE、SEARCH_USE、DOCUMENT_VIEW
+资料维护员	普通员工权限，加 DOCUMENT_UPLOAD、DOCUMENT_MANAGE
+知识库管理员	资料维护员权限，加 KNOWLEDGE_BASE_MANAGE
+系统管理员	除 Harness 外的全部后台管理权限
+
+
+要求：
+- 重复执行不会创建重复角色或权限。
+- 不自动修改现有普通用户的角色。
+- 现有超级管理员不受影响。
+- HARNESS_USE 暂时只允许超级管理员使用，不能因为普通角色勾选就绕过原来的管理员限制。
+3. 后端权限解析器
+在权限服务中增加：
+has_permission(user, permission_code) -> bool
+require_permission(user, permission_code) -> User
+effective_permissions(user) -> set[str]
+规则：
+- 未登录返回 401 AUTH_REQUIRED。
+- 已登录但无权限返回 403 PERMISSION_DENIED。
+- 停用用户没有权限。
+- 停用角色不参与权限合并。
+- 超级管理员自动通过。
+- 不能仅在前端隐藏按钮，后端必须逐接口验证。
+- 权限拒绝写入审计日志，但审计失败不能覆盖原始403响应。
+4. 当前用户接口
+修改：
+GET /api/auth/me
+返回当前用户的有效权限码：
+{
+  "authenticated": true,
+  "user": {
+    "id": "...",
+    "roles": ["普通员工"],
+    "permissions": [
+      "ANSWER_USE",
+      "SEARCH_USE",
+      "DOCUMENT_VIEW"
+    ]
+  }
+}
+要求：
+- 只返回启用角色产生的权限。
+- 超级管理员可以返回所有权限。
+- 前端刷新后根据该字段恢复菜单。
+- 前端不能自己根据角色名称推算权限。
+5. 接口权限收口
+知识问答
+POST /api/answer/stream       ANSWER_USE
+POST /api/answer/warmup       ANSWER_USE
+状态检查可以保持登录后可访问。
+资料检索
+POST /api/search              SEARCH_USE
+仍需继续执行文档ACL过滤。
+资料查看
+GET /api/documents
+GET /api/documents/{id}
+GET /api/documents/{id}/content
+GET /api/documents/{id}/download
+GET /api/documents/{id}/versions
+要求 DOCUMENT_VIEW，并继续执行原来的文档 READ ACL。
+上传与批量导入
+POST /api/documents/upload
+POST /api/batches
+POST /api/batches/{id}/files
+POST /api/batches/{id}/files/{file_id}/retry
+POST /api/batches/{id}/files/{file_id}/ignore
+POST /api/batches/{id}/cancel
+要求 DOCUMENT_UPLOAD。
+文档管理
+以下接口同时要求：
+DOCUMENT_MANAGE
++
+原有文档MANAGE ACL、上传人或超级管理员判断
+包括：
+PATCH  /api/documents/{id}
+POST   /api/documents/{id}/enable
+POST   /api/documents/{id}/disable
+POST   /api/documents/{id}/restore
+POST   /api/documents/{id}/reprocess
+DELETE /api/documents/{id}
+DELETE /api/documents/{id}/purge
+PUT    /api/documents/{id}/access
+PATCH  /api/documents/{id}/external-policy
+GET    /api/documents/{id}/acl
+不能因为拥有 DOCUMENT_MANAGE 就管理所有文档。还必须通过文档级 MANAGE 校验。
+知识库
+GET /api/knowledge-bases
+允许有 ANSWER_USE、SEARCH_USE 或 DOCUMENT_VIEW 的用户读取必要的基础列表。
+以下接口要求 KNOWLEDGE_BASE_MANAGE：
+POST  /api/knowledge-bases
+PATCH /api/knowledge-bases/{id}
+POST  /api/knowledge-bases/{id}/enable
+POST  /api/knowledge-bases/{id}/disable
+管理功能
+检索实验室             RETRIEVAL_LAB_USE
+助手增删改和知识库绑定   ASSISTANT_MANAGE
+用户、部门、角色管理     IDENTITY_MANAGE
+审计日志               AUDIT_VIEW
+运营统计               STATS_VIEW
+Harness继续保持：
+超级管理员
++
+HARNESS_USE
+不能降低现有Harness安全要求。
+6. 角色管理页面
+角色新增、编辑抽屉中增加“功能权限”区域，按类别显示：
+基础使用
+- 知识问答
+- 资料检索
+- 查看资料
+
+资料管理
+- 上传资料
+- 管理资料
+- 管理知识库
+
+系统运营
+- 检索实验室
+- 助手管理
+- 身份与角色管理
+- 审计日志
+- 运营统计
+要求：
+- 支持全选某个分类。
+- 显示角色已有权限。
+- 保存角色时同时保存权限。
+- 停用角色前提示其功能权限也会立即失效。
+- 不向普通管理员提供Harness权限选项。
+- 列表增加“功能权限数量”列。
+- 不使用横向滚动的小区域。
+7. 前端菜单与按钮控制
+前端增加统一权限方法：
+hasPermission(code: PermissionCode): boolean
+hasAnyPermission(codes: PermissionCode[]): boolean
+导航控制：
+- 没有 ANSWER_USE：隐藏知识问答。
+- 没有 SEARCH_USE：隐藏资料检索。
+- 没有 DOCUMENT_VIEW：隐藏资料库。
+- 没有 RETRIEVAL_LAB_USE：隐藏检索实验室。
+- 拥有任意后台权限时才显示系统管理。
+- 系统管理内部只显示用户有权访问的子菜单。
+资料库控制：
+- 没有 DOCUMENT_UPLOAD：隐藏单文件上传、批量导入。
+- 没有 DOCUMENT_MANAGE：隐藏编辑、停用、删除、恢复和ACL操作。
+- 没有 KNOWLEDGE_BASE_MANAGE：隐藏管理知识库入口。
+要求：
+- 页面刷新恢复原页面前重新校验权限。
+- 用户权限被管理员修改后，下次接口请求必须立即由后端阻止。
+- 收到 403 PERMISSION_DENIED 时显示“当前账号没有此功能权限”。
+- 不能把前端隐藏当作安全控制。
+8. 审计
+新增或完善以下审计事件：
+role_permissions_changed
+authorization_denied
+document_upload_denied
+knowledge_base_manage_denied
+审计内容至少包含：
+- 当前用户ID。
+- 接口路径。
+- 请求方法。
+- 缺少的权限码。
+- 操作目标。
+- 请求ID。
+- 成功或失败状态。
+严禁记录：
+- 密码。
+- Cookie。
+- DeepSeek API Key。
+- 完整敏感文档正文。
+9. 自动化测试
+权限单元测试
+覆盖：
+- 超级管理员拥有全部权限。
+- 多角色权限取并集。
+- 停用角色权限立即消失。
+- 无角色用户没有功能权限。
+- 普通员工不能上传。
+- 资料维护员可以上传。
+- 资料维护员不能管理知识库。
+- 知识库管理员可以管理知识库。
+- 功能权限不能绕过文档ACL。
+- 无权限返回403，不是404或500。
+- 未登录返回401。
+后端接口测试
+逐类验证：
+answer
+search
+documents
+batches
+knowledge-bases
+retrieval-lab
+assistants
+users
+departments
+roles
+audit
+stats
+harness
+每类至少包含：
+- 有权限成功。
+- 无权限403。
+- 未登录401。
+- 超级管理员成功。
+前端验证
+必须通过：
+npm --prefix frontend run build
+不得只修改测试来适配错误实现。
+10. Mac集成验收
+创建独立测试数据库，不能使用现有业务库。运行：
+COMPANY_SEARCH_TEST_DATABASE_URL="postgresql+psycopg://company_search:company_search@127.0.0.1:54329/company_search_test" \
+backend/.venv/bin/python -m pytest backend/tests/test_p1_permission_integration.py -v
+测试前确保 company_search_test 是专用测试库，因为集成测试会执行迁移和写入测试数据。
+手工建立账号：
+admin              超级管理员
+employee           普通员工
+maintainer         资料维护员
+kb_admin           知识库管理员
+no_role            无角色
+手工验收矩阵：
+操作	employee	maintainer	kb_admin	no_role	admin
+问答	✅	✅	✅	❌	✅
+检索	✅	✅	✅	❌	✅
+查看有权资料	✅	✅	✅	❌	✅
+上传	❌	✅	✅	❌	✅
+管理本人有MANAGE的资料	❌	✅	✅	❌	✅
+管理知识库	❌	❌	✅	❌	✅
+系统管理	❌	❌	按配置	❌	✅
+Harness	❌	❌	❌	❌	✅
+
+
+还必须测试：
+- 停用角色后刷新页面，菜单和接口权限均失效。
+- 用户保持旧页面时撤销权限，下一次请求返回403。
+- 修改角色权限后不需要重新创建账号。
+- 用户A的缓存答案不能被无权用户B获取。
+- COMPANY资料仍按现有规则可见，但必须同时具备 DOCUMENT_VIEW。
+- ROLE、DEPARTMENT、USER、PRIVATE资料继续遵守文档ACL。
+- DeepSeek不能接收无权或禁止外发的资料。
+11. 文档更新
+更新：
+- [P1升级说明](/home/kpsdev/projects/kangshifu/docs/p1-upgrade-guide.md)
+- [后端接口文档](/home/kpsdev/projects/kangshifu/docs/backend-api.md)
+- README升级步骤。
+- 新增权限码与接口映射表。
+- 新增Mac权限验收手册。
+删除或修正“当前尚未实现登录和权限”之类的过期说明。
+明确不在本次范围
+先不要实现：
+- Linux正式部署。
+- Nginx和HTTPS。
+- SSO、LDAP、企业微信登录。
+- 多租户。
+- 权限申请审批流。
+- 数据同步连接器。
+- 重做文档ACL模型。
+- 让普通用户执行Harness。
+完成标准
+满足以下条件才算P1真正完成：
+数据库迁移可升级、可回滚
+后端每个接口有明确权限
+前端菜单与操作按权限展示
+后端不能被绕过
+文档ACL继续有效
+静态测试通过
+PostgreSQL集成测试通过
+前端生产构建通过
+Mac五类账号手工验收通过
+文档已同步
+DeepSeek完成后，把代码保留在当前分支，不要直接合并或删除旧迁移。我后续做CR时会重点检查：权限绕过、迁移安全、超级管理员兼容、Harness是否被降权、文档ACL是否被功能权限错误替代，以及测试是否真正覆盖403场景。

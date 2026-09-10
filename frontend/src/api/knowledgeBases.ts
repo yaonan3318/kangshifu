@@ -9,6 +9,6 @@ async function parse<T>(response: Response): Promise<T> {
 }
 
 export const listKnowledgeBases = async (): Promise<KnowledgeBaseList> => parse(await fetch('/api/knowledge-bases'))
-export const createKnowledgeBase = async (name: string, description: string): Promise<KnowledgeBaseRecord> => parse(await fetch('/api/knowledge-bases', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name, description: description || null}) }))
-export const updateKnowledgeBase = async (id: string, body: {name?:string;description?:string|null}): Promise<KnowledgeBaseRecord> => parse(await fetch(`/api/knowledge-bases/${id}`, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) }))
+export const createKnowledgeBase = async (name: string, description: string, chunkingConfig?: Record<string, unknown>): Promise<KnowledgeBaseRecord> => parse(await fetch('/api/knowledge-bases', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name, description: description || null, chunking_config: chunkingConfig ?? null}) }))
+export const updateKnowledgeBase = async (id: string, body: {name?:string;description?:string|null;chunking_config?:Record<string, unknown>|null}): Promise<KnowledgeBaseRecord> => parse(await fetch(`/api/knowledge-bases/${id}`, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) }))
 export const setKnowledgeBaseEnabled = async (id: string, enabled: boolean): Promise<KnowledgeBaseRecord> => parse(await fetch(`/api/knowledge-bases/${id}/${enabled?'enable':'disable'}`, {method:'POST'}))

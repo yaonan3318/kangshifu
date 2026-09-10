@@ -164,6 +164,234 @@ class P1SecurityRegressionTests(unittest.TestCase):
         service = source("backend/app/services/documents.py")
         self.assertIn("require_manage(self.resolver, document)", service)
 
+    # ---- P2-0 质量基线 ----
+
+    def test_retrieval_config_is_versionable(self) -> None:
+        config = source("backend/app/services/retrieval_config.py")
+        for field in (
+            "keyword_limit", "vector_limit", "rrf_k", "rerank_enabled", "final_limit",
+            "similarity_threshold", "query_rewrite_synonyms",
+        ):
+            self.assertIn(field, config)
+        self.assertIn("def config_diff", config)
+
+    def test_search_service_reads_versioned_config(self) -> None:
+        search = source("backend/app/services/search.py")
+        self.assertIn("self.config.keyword_limit", search)
+        self.assertIn("self.config.vector_limit", search)
+        self.assertIn("self.config.similarity_threshold", search)
+        self.assertIn("self.config.min_evidence_score", search)
+        self.assertIn("config: RetrievalConfig | None = None", search)
+
+    def test_evaluation_service_exposes_metrics_and_compare(self) -> None:
+        service = source("backend/app/services/retrieval_evaluation.py")
+        for metric in (
+            "document_recall", "chunk_recall", "hit_rate_at_1", "hit_rate_at_3", "hit_rate_at_5",
+            "keypoint_coverage", "citation_accuracy", "no_answer_accuracy",
+            "first_token_latency_ms", "answer_latency_ms",
+        ):
+            self.assertIn(metric, service)
+        self.assertIn("async def run_evaluation", service)
+        self.assertIn("def compare_runs", service)
+        self.assertIn("def import_cases", service)
+
+    def test_evaluation_endpoints_are_gated_and_linear(self) -> None:
+        api = source("backend/app/api/retrieval_lab.py")
+        self.assertIn("RETRIEVAL_LAB_USE", api)
+        self.assertIn("/evaluation-sets", api)
+        self.assertIn("/config-versions", api)
+        self.assertIn("/runs/compare", api)
+        migration = source("backend/migrations/versions/0019_evaluation_sets.py")
+        self.assertIn('revision = "0019_evaluation_sets"', migration)
+        self.assertIn("def downgrade()", migration)
+
+    # ---- P2-1 检索准确性 ----
+
+    def test_query_rewrite_falls_back_and_keeps_original(self) -> None:
+        rewrite = source("backend/app/services/query_rewrite.py")
+        self.assertIn("async def rewrite", rewrite)
+        self.assertIn("async def multi_query", rewrite)
+        self.assertIn("except LlmError", rewrite)
+        self.assertIn("original", rewrite)
+        # 提示词要求不得改变用户原意。
+        self.assertIn("不得改变用户原意", rewrite)
+
+    def test_multi_query_rrf_and_metadata_filters(self) -> None:
+        search = source("backend/app/services/search.py")
+        self.assertIn("def _fuse_lists", search)
+        self.assertIn("def search_with_diagnostics", search)
+        for field in (
+            "department_id", "owner_user_id", "document_status", "relative_path",
+            "version_number", "valid_only",
+        ):
+            self.assertIn(f"request.{field}", search)
+
+    def test_dictionary_is_admin_maintained_not_hardcoded(self) -> None:
+        model = source("backend/app/models/dictionary.py")
+        self.assertIn("retrieval_dictionary_entries", model)
+        service = source("backend/app/services/dictionaries.py")
+        self.assertIn("def load_expansions", service)
+        processor = source("backend/app/services/query_processing.py")
+        self.assertIn("_spelling_corrections", processor)
+        api = source("backend/app/api/retrieval_lab.py")
+        self.assertIn("/dictionaries", api)
+
+    def test_rerank_records_before_after_ranks(self) -> None:
+        search = source("backend/app/services/search.py")
+        self.assertIn("pre_rerank_rank", search)
+        self.assertIn("post_rerank_rank", search)
+
+    # ---- P2-2 回答可靠性 ----
+
+    def test_answer_quality_confidence_and_citation_check(self) -> None:
+        quality = source("backend/app/services/answer_quality.py")
+        for snippet in (
+            "def compute_confidence", "def verify_answer", "def classify_question",
+            "def mark_unsupported", "INSUFFICIENT", "NO_RELEVANT_DOCUMENT",
+            "PERMISSION_RESTRICTED", "LOW_RELEVANCE", "MODEL_UNAVAILABLE",
+        ):
+            self.assertIn(snippet, quality)
+        self.assertIn("当前可访问的公司资料中没有找到足够依据。", quality)
+
+    def test_answer_quality_has_structure_templates(self) -> None:
+        quality = source("backend/app/services/answer_quality.py")
+        for section in ("适用范围", "办理步骤", "实施步骤", "时间线", "对比表格", "主题归类"):
+            self.assertIn(section, quality)
+
+    def test_rag_emits_quality_events_and_marks_inference(self) -> None:
+        rag = source("backend/app/services/rag.py")
+        for snippet in (
+            'type="confidence"', 'type="citation_check"', 'type="no_answer"',
+            "compute_confidence", "verify_answer", "mark_unsupported", "template_instruction",
+        ):
+            self.assertIn(snippet, rag)
+
+    def test_hydrate_source_exposes_traceability(self) -> None:
+        chat = source("backend/app/services/chat.py")
+        for field in ("version_number", "matched_keywords", "can_download", "extension"):
+            self.assertIn(field, chat)
+
+    # ---- P2-3 助手角色增强 ----
+
+    def test_assistant_model_has_role_fields(self) -> None:
+        model = source("backend/app/models/assistant.py")
+        for field in (
+            "answer_template", "internet_enabled", "no_answer_policy", "capabilities", "limitations",
+        ):
+            self.assertIn(field, model)
+
+    def test_assistant_presets_seeded_idempotently(self) -> None:
+        migration = source("backend/migrations/versions/0021_assistant_roles.py")
+        for preset in (
+            "康师傅综合助手", "人事制度助手", "技术研发助手",
+            "产品资料助手", "运维助手", "项目进度助手",
+        ):
+            self.assertIn(preset, migration)
+        self.assertIn("ON CONFLICT (name) DO NOTHING", migration)
+        self.assertIn("def downgrade()", migration)
+
+    def test_assistant_welcome_endpoint_and_policy(self) -> None:
+        api = source("backend/app/api/assistants.py")
+        self.assertIn("/welcome", api)
+        for field in ("capabilities", "limitations", "recent_questions", "knowledge_scope",
+                      "general_knowledge_allowed", "operations_allowed"):
+            self.assertIn(field, api)
+        rag = source("backend/app/services/rag.py")
+        self.assertIn("answer_template", rag)
+        self.assertIn("no_answer_policy", rag)
+
+    # ---- P2-4 轻量 Chatflow ----
+
+    def test_chatflow_nodes_and_graph_validation(self) -> None:
+        service = source("backend/app/services/chatflow.py")
+        for node_type in (
+            "start", "question_classify", "query_rewrite", "retrieval", "rerank", "condition",
+            "local_model", "deepseek", "harness", "answer_check", "final_answer",
+        ):
+            self.assertIn(f'"{node_type}"', service)
+        self.assertIn("def validate_graph", service)
+        self.assertIn("def build_plan", service)
+        self.assertIn("def debug_run", service)
+        self.assertIn("CHATFLOW_GRAPH_CYCLE", service)
+
+    def test_chatflow_versions_and_assistant_binding(self) -> None:
+        model = source("backend/app/models/chatflow.py")
+        self.assertIn("class Chatflow", model)
+        self.assertIn("class ChatflowVersion", model)
+        assistant = source("backend/app/models/assistant.py")
+        self.assertIn("chatflow_id", assistant)
+        api = source("backend/app/api/chatflows.py")
+        for path in ("/publish", "/rollback", "/versions", "/debug", "/node-types"):
+            self.assertIn(path, api)
+
+    def test_rag_service_uses_chatflow_plan_and_node_timings(self) -> None:
+        rag = source("backend/app/services/rag.py")
+        self.assertIn("build_plan", rag)
+        self.assertIn("ChatflowPlan", rag)
+        self.assertIn("node_timings", rag)
+        self.assertIn("_apply_plan", rag)
+
+    # ---- P2-5 用户体验与比赛展示 ----
+
+    def test_knowledge_gap_center(self) -> None:
+        model = source("backend/app/models/knowledge_gap.py")
+        self.assertIn("class KnowledgeGap", model)
+        for reason in ("NO_ANSWER", "LOW_CONFIDENCE", "NEGATIVE_FEEDBACK", "WRONG_DOCUMENT"):
+            self.assertIn(reason, model)
+        service = source("backend/app/services/knowledge_gaps.py")
+        self.assertIn("def record_gap", service)
+        self.assertIn("async def rerun", service)
+        api = source("backend/app/api/knowledge_gaps.py")
+        for path in ("/statistics", "/rerun"):
+            self.assertIn(path, api)
+
+    def test_dashboard_and_stage_visualization(self) -> None:
+        stats = source("backend/app/services/stats.py")
+        self.assertIn("def compute_dashboard", stats)
+        for field in ("knowledge_base_count", "document_count", "chunk_count", "citation_coverage",
+                      "satisfaction", "knowledge_gap_count"):
+            self.assertIn(field, stats)
+        api = source("backend/app/api/stats.py")
+        self.assertIn("/dashboard", api)
+        rag = source("backend/app/services/rag.py")
+        for stage in ('"understanding"', '"retrieving"', '"candidates"', '"checking"'):
+            self.assertIn(stage, rag)
+        self.assertIn("_follow_up_suggestions", rag)
+
+    # ---- P2-6 文档理解能力 ----
+
+    def test_chunking_strategies_and_config(self) -> None:
+        chunking = source("backend/app/services/chunking.py")
+        for strategy in ("fixed", "heading", "paragraph", "page", "table", "parent_child"):
+            self.assertIn(f'"{strategy}"', chunking)
+        self.assertIn("class ChunkingConfig", chunking)
+        for field in ("target", "maximum", "overlap", "min_chars", "row_batch"):
+            self.assertIn(field, chunking)
+        self.assertIn("def chunk_blocks", chunking)
+
+    def test_parsers_support_p2_6_features(self) -> None:
+        pdf = source("backend/app/parsers/pdf.py")
+        for feature in ("_repeated_lines", "_tables", "_sort_columns", "_is_heading", "_dedupe"):
+            self.assertIn(feature, pdf)
+        docx = source("backend/app/parsers/docx.py")
+        self.assertIn("_row_values", docx)
+        self.assertIn("_image_blocks", docx)
+        xlsx = source("backend/app/parsers/spreadsheet.py")
+        self.assertIn("_merged_values", xlsx)
+        pptx = source("backend/app/parsers/presentation.py")
+        self.assertIn("_ocr_picture", pptx)
+
+    def test_document_graph_metadata_and_preview(self) -> None:
+        model = source("backend/app/models/document.py")
+        for field in ("author", "department_id", "topic", "related_document_ids"):
+            self.assertIn(field, model)
+        kb_model = source("backend/app/models/knowledge_base.py")
+        self.assertIn("chunking_config", kb_model)
+        api = source("backend/app/api/documents.py")
+        self.assertIn("/chunk-preview", api)
+        service = source("backend/app/services/documents.py")
+        self.assertIn("def preview_chunks", service)
+
     def test_me_returns_permissions_from_enabled_roles(self) -> None:
         auth_api = source("backend/app/api/auth.py")
         self.assertIn("effective_permissions(user)", auth_api)
@@ -182,7 +410,7 @@ class P1SecurityRegressionTests(unittest.TestCase):
         search = source("backend/app/services/search.py")
         self.assertIn("def _apply_feedback", search)
         # 阈值判断仍使用未叠加反馈的 final_score。
-        self.assertIn("if item.final_score < self.settings.search_min_evidence_score", search)
+        self.assertIn("if item.final_score < self.config.min_evidence_score", search)
 
     def test_external_policy_blocks_sensitive_documents(self) -> None:
         audit = source("backend/app/services/audit.py")
@@ -204,6 +432,12 @@ class P1SecurityRegressionTests(unittest.TestCase):
             ("0016_feedback_documents.py", "0016_feedback_documents", "0015_feedback_ranking"),
             ("0017_assistant_runtime_policy.py", "0017_assistant_runtime_policy", "0016_feedback_documents"),
             ("0018_function_rbac.py", "0018_function_rbac", "0017_assistant_runtime_policy"),
+            ("0019_evaluation_sets.py", "0019_evaluation_sets", "0018_function_rbac"),
+            ("0020_search_accuracy.py", "0020_search_accuracy", "0019_evaluation_sets"),
+            ("0021_assistant_roles.py", "0021_assistant_roles", "0020_search_accuracy"),
+            ("0022_chatflow.py", "0022_chatflow", "0021_assistant_roles"),
+            ("0023_knowledge_gaps.py", "0023_knowledge_gaps", "0022_chatflow"),
+            ("0024_document_understanding.py", "0024_document_understanding", "0023_knowledge_gaps"),
         ):
             content = (versions / filename).read_text(encoding="utf-8")
             self.assertIn(f'revision = "{revision}"', content)

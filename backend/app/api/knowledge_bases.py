@@ -48,7 +48,7 @@ def create_knowledge_base(
     service: Annotated[KnowledgeBaseService, Depends(get_service)],
 ):
     require_permission(getattr(request.state, "auth_user", None), KNOWLEDGE_BASE_MANAGE)
-    return response(service.create(body.name, body.description))
+    return response(service.create(body.name, body.description, body.chunking_config))
 
 
 @router.patch("/{knowledge_base_id}", response_model=KnowledgeBaseResponse)
@@ -59,7 +59,10 @@ def update_knowledge_base(
     service: Annotated[KnowledgeBaseService, Depends(get_service)],
 ):
     require_permission(getattr(request.state, "auth_user", None), KNOWLEDGE_BASE_MANAGE)
-    return response(service.update(knowledge_base_id, body.name, body.description))
+    return response(service.update(
+        knowledge_base_id, body.name, body.description,
+        body.chunking_config, "chunking_config" in body.model_fields_set,
+    ))
 
 
 @router.post("/{knowledge_base_id}/enable", response_model=KnowledgeBaseResponse)

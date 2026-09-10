@@ -8,9 +8,10 @@
 """
 
 import asyncio
+import json
 import os
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -42,19 +43,23 @@ from app.config import Settings  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.models import (  # noqa: E402
-    DEFAULT_KNOWLEDGE_BASE_ID, AclPermission, AnswerFeedback, AnswerFeedbackDocument, AuditLog,
-    ChatMessage, ChatMessageRole, ChatMessageSource, ChatMessageStatus, ChatSession, Department,
-    Document, DocumentAcl, DocumentChunk, DocumentFeedbackStats, DocumentStatus, DocumentVisibility,
-    FeedbackRating, Role, SubjectType, User,
+    DEFAULT_KNOWLEDGE_BASE_ID, AclPermission, AnswerFeedback, AnswerFeedbackDocument, Assistant,
+    AuditLog, ChatMessage, ChatMessageRole, ChatMessageSource, ChatMessageStatus, ChatSession,
+    Department, Document, DocumentAcl, DocumentChunk, DocumentFeedbackStats, DocumentStatus,
+    DocumentVisibility, FeedbackRating, Role, SubjectType, User,
 )
-from app.schemas.answer import AnswerProvider, AnswerRequest, KnowledgeScope  # noqa: E402
+from app.schemas.answer import (  # noqa: E402
+    AnswerEvent, AnswerProvider, AnswerRequest, AnswerSource, ConversationTurn, KnowledgeScope,
+)
 from app.schemas.search import SearchRequest  # noqa: E402
 from app.services import identity  # noqa: E402
 from app.services.auth import hash_password  # noqa: E402
 from app.services.chat import AnswerRecorder, ChatService  # noqa: E402
 from app.services.feedback_ranking import FeedbackRankingService  # noqa: E402
 from app.services.permissions import PermissionResolver  # noqa: E402
+from app.services.query_rewrite import QueryRewriteOutcome  # noqa: E402
 from app.services.rag import RagService, _answer_cache  # noqa: E402
+from app.services.retrieval_config import RetrievalConfig  # noqa: E402
 from app.services.search import SearchService  # noqa: E402
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -77,6 +82,8 @@ def client():
 
 
 def _login(client: TestClient, username: str, password: str = PASSWORD):
+    # 先清空 Cookie，避免上一个用例手工设置的旧会话 Cookie 遮蔽新登录。
+    client.cookies.clear()
     response = client.post("/api/auth/login", json={"username": username, "password": password})
     assert response.status_code == 200, response.text
     return response
@@ -120,6 +127,9 @@ def seeded(client):
             return user
 
         admin = session.scalar(select(User).where(User.username == "admin"))
+        if admin is not None:
+            # 统一管理员测试密码，避免依赖部署环境的 COMPANY_SEARCH_ADMIN_PASSWORD。
+            admin.password_hash = hash_password(PASSWORD)
         tech_user = make_user("tech_user", tech.id, extra_roles=(base_role, maintainer_role))
         hr_user = make_user("hr_user", hr.id, extra_roles=(base_role,))
         role_user = make_user("role_user", None, role, extra_roles=(base_role,))
@@ -577,19 +587,28 @@ def external_docs(client, seeded):
         ids["restricted"] = make("ext_restricted.txt", sensitivity_level="RESTRICTED")
         ids["mixed_allowed"] = make("ext_mixed.txt")
         ids["mixed_blocked"] = make("ext_mixed_blocked.txt", external_llm_allowed=False)
+        # DeepSeek 外发策略由助手配置决定，因此需要一个显式开启外发的助手。
+        assistant = Assistant(
+            name="external-policy-assistant", deepseek_enabled=True,
+            use_deepseek_allowed=True, enabled=True,
+        )
+        session.add(assistant)
         session.commit()
+        ids["assistant_id"] = assistant.id
     return ids
 
 
-def _external_request(name: str) -> AnswerRequest:
-    return AnswerRequest(question="alpha secret", document_name=name, use_deepseek=True)
+def _external_request(name: str, assistant_id=None) -> AnswerRequest:
+    return AnswerRequest(
+        question="alpha secret", document_name=name, assistant_id=assistant_id,
+    )
 
 
 def test_external_model_called_for_allowed_document(seeded, external_docs):
     settings = Settings()
     settings.answer_cache_enabled = False
     service, deepseek = _service_for(seeded["admin"].id, settings=settings)
-    events = asyncio.run(_collect(service, _external_request("ext_allowed")))
+    events = asyncio.run(_collect(service, _external_request("ext_allowed", external_docs["assistant_id"])))
     assert deepseek.calls, "允许外发时应当调用外部模型"
     assert _events(events, "done")[0].provider == AnswerProvider.DEEPSEEK
 
@@ -602,7 +621,7 @@ def test_external_model_blocked_by_policy(seeded, external_docs, name):
     settings = Settings()
     settings.answer_cache_enabled = False
     service, deepseek = _service_for(seeded["admin"].id, settings=settings)
-    events = asyncio.run(_collect(service, _external_request(name)))
+    events = asyncio.run(_collect(service, _external_request(name, external_docs["assistant_id"])))
     assert deepseek.calls == []
     warnings = _events(events, "warning")
     assert any(event.warning.code == "EXTERNAL_LLM_BLOCKED" for event in warnings)
@@ -615,7 +634,7 @@ def test_external_model_blocked_when_any_citation_restricted(seeded, external_do
     settings = Settings()
     settings.answer_cache_enabled = False
     service, deepseek = _service_for(seeded["admin"].id, settings=settings)
-    events = asyncio.run(_collect(service, _external_request("ext_mixed")))
+    events = asyncio.run(_collect(service, _external_request("ext_mixed", external_docs["assistant_id"])))
     source_ids = {source.document_id for source in _events(events, "sources")[0].sources}
     assert external_docs["mixed_allowed"].id in source_ids
     assert external_docs["mixed_blocked"].id in source_ids
@@ -1246,3 +1265,787 @@ def test_rbac_denials_are_audited_without_secrets(client, rbac_users):
             .order_by(AuditLog.created_at.desc()).limit(1)
         )
         assert kb_denied is not None
+
+
+# ======================================================================
+# P2-0 质量基线：评测集、配置版本、批量运行与新旧对比
+# ======================================================================
+
+class _FakeEmbeddingsNegative:
+    """返回与所有已存向量都不相似的查询向量，让评测只走关键词召回。"""
+
+    def encode_query(self, _text):
+        return [-1.0] + [0.0] * 1023
+
+    def encode_documents(self, texts):
+        return [self.encode_query(text) for text in texts]
+
+
+@pytest.fixture(scope="module")
+def p2_documents(client, seeded):
+    ids: dict[str, object] = {}
+    with SessionLocal() as session:
+        def make(name: str, content: str) -> Document:
+            document = Document(
+                id=uuid.uuid4(), original_name=name, stored_path=f"test/{name}",
+                extension="txt", mime_type="text/plain", size_bytes=10, sha256=uuid.uuid4().hex,
+                status=DocumentStatus.READY, knowledge_base_id=DEFAULT_KNOWLEDGE_BASE_ID,
+                visibility=DocumentVisibility.COMPANY, enabled=True,
+            )
+            session.add(document)
+            session.flush()
+            session.add(DocumentChunk(
+                document_id=document.id, sequence_number=1, content=content,
+                search_vector=func.to_tsvector("simple", content),
+            ))
+            return document
+
+        ids["expected"] = make("p2_expected.txt", "p2uniqueexpected 部署回滚流程说明")
+        ids["forbidden"] = make("p2_forbidden.txt", "p2uniqueexpected 机密禁止外发内容")
+        session.commit()
+    return ids
+
+
+def _p2_case_payload(expected_id, forbidden_id) -> dict:
+    return {
+        "name": "P2 用例", "question": "p2uniqueexpected",
+        "expected_document_ids": [str(expected_id)],
+        "must_cite_document_ids": [str(expected_id)],
+        "forbidden_document_ids": [str(forbidden_id)],
+        "expected_answer_keypoints": ["部署", "回滚"],
+    }
+
+
+def test_p2_evaluation_set_config_and_run(client, seeded, p2_documents, monkeypatch):
+    import app.services.search as search_module
+
+    monkeypatch.setattr(search_module, "EmbeddingService", lambda settings: _FakeEmbeddingsNegative())
+    _login(client, "admin")
+
+    created_set = client.post("/api/retrieval-lab/evaluation-sets", json={"name": "P2 评测集"})
+    assert created_set.status_code == 201, created_set.text
+    set_id = created_set.json()["id"]
+
+    created_case = client.post(
+        f"/api/retrieval-lab/evaluation-sets/{set_id}/cases",
+        json=_p2_case_payload(p2_documents["expected"].id, p2_documents["forbidden"].id),
+    )
+    assert created_case.status_code == 201, created_case.text
+
+    v1 = client.post("/api/retrieval-lab/config-versions", json={
+        "name": "v1", "config": {"keyword_limit": 10, "vector_limit": 10, "rrf_k": 60}, "is_default": True,
+    }).json()
+    v2 = client.post("/api/retrieval-lab/config-versions", json={
+        "name": "v2", "config": {"keyword_limit": 20, "vector_limit": 20, "rrf_k": 30},
+    }).json()
+    differences = client.get(
+        "/api/retrieval-lab/config-versions/compare", params={"left": v1["id"], "right": v2["id"]},
+    ).json()["differences"]
+    assert {"keyword_limit", "rrf_k"} <= {item["field"] for item in differences}
+
+    run1 = client.post("/api/retrieval-lab/runs", json={
+        "evaluation_set_id": set_id, "config_version_id": v1["id"], "limit": 5,
+    })
+    assert run1.status_code == 201, run1.text
+    body1 = run1.json()
+    assert body1["metrics"]["case_count"] == 1
+    assert body1["metrics"]["document_recall"] == 1.0
+    assert body1["metrics"]["answer_mode"] == "evidence"
+    # 命中禁止召回文档必须被检出。
+    assert body1["metrics"]["forbidden_violation_count"] == 1
+    assert body1["config_snapshot"]["keyword_limit"] == 10
+
+    run2 = client.post("/api/retrieval-lab/runs", json={
+        "evaluation_set_id": set_id, "config_version_id": v2["id"], "limit": 5,
+    }).json()
+    compare = client.get(
+        "/api/retrieval-lab/runs/compare", params={"left": body1["id"], "right": run2["id"]},
+    ).json()
+    assert "document_recall" in compare["metric_deltas"]
+    assert compare["config_differences"]
+    assert compare["case_changes"]
+    _logout(client)
+
+
+def test_p2_run_with_answer_metrics(client, seeded, p2_documents, monkeypatch):
+    import app.services.retrieval_evaluation as evaluation_module
+    import app.services.search as search_module
+
+    monkeypatch.setattr(search_module, "EmbeddingService", lambda settings: _FakeEmbeddingsNegative())
+    expected_id = p2_documents["expected"].id
+
+    class _FakeRag:
+        def __init__(self, session, settings, user=None, config=None, source_limit=None):
+            self.config = config
+            self.source_limit = source_limit
+
+        async def stream(self, request):
+            yield AnswerEvent(type="sources", sources=[AnswerSource(
+                citation_number=1, chunk_id=uuid.uuid4(), document_id=expected_id,
+                document_name="p2_expected.txt", extension="txt", sequence_number=1,
+                content="部署回滚流程", page_start=None, page_end=None, slide_number=None,
+                sheet_name=None, row_start=None, row_end=None, section_path=[],
+                ocr_confidence=None, match_type="keyword", score=0.9,
+            )])
+            yield AnswerEvent(type="delta", text="部署与回滚答案")
+            yield AnswerEvent(type="metrics", metrics={"llm_first_token_ms": 12.0, "total_ms": 34.0})
+            yield AnswerEvent(type="done", scope=KnowledgeScope.INTERNAL, provider=AnswerProvider.LOCAL)
+
+    monkeypatch.setattr(evaluation_module, "RagService", _FakeRag)
+    _login(client, "admin")
+    set_id = client.post("/api/retrieval-lab/evaluation-sets", json={"name": "答案评测集"}).json()["id"]
+    client.post(
+        f"/api/retrieval-lab/evaluation-sets/{set_id}/cases",
+        json=_p2_case_payload(expected_id, p2_documents["forbidden"].id),
+    )
+    run = client.post("/api/retrieval-lab/runs", json={
+        "evaluation_set_id": set_id, "limit": 5, "include_answers": True,
+    })
+    assert run.status_code == 201, run.text
+    metrics = run.json()["metrics"]
+    assert metrics["answer_mode"] == "answer"
+    assert metrics["keypoint_coverage"] == 1.0
+    assert metrics["citation_accuracy"] == 1.0
+    assert metrics["first_token_latency_ms"] == 12.0
+    assert metrics["answer_latency_ms"] == 34.0
+    _logout(client)
+
+
+def test_p2_import_cases_from_csv(client, seeded, p2_documents):
+    _login(client, "admin")
+    set_id = client.post("/api/retrieval-lab/evaluation-sets", json={"name": "导入评测集"}).json()["id"]
+    csv_body = (
+        "name,question,expected_documents,must_cite_documents,forbidden_documents,answer_keypoints\n"
+        "导入用例,p2uniqueexpected,p2_expected.txt,p2_expected.txt,p2_forbidden.txt,部署;回滚\n"
+    )
+    response = client.post(
+        f"/api/retrieval-lab/evaluation-sets/{set_id}/import",
+        files={"file": ("cases.csv", csv_body.encode("utf-8"), "text/csv")},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["created"] == 1
+    cases = client.get(f"/api/retrieval-lab/evaluation-sets/{set_id}/cases").json()["items"]
+    assert cases[0]["expected_document_ids"] == [str(p2_documents["expected"].id)]
+    assert cases[0]["forbidden_document_ids"] == [str(p2_documents["forbidden"].id)]
+    assert cases[0]["expected_answer_keypoints"] == ["部署", "回滚"]
+    _logout(client)
+
+
+def test_p2_import_cases_from_excel(client, seeded, p2_documents):
+    import io
+
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["name", "question", "expected_documents", "must_cite_documents", "answer_keypoints"])
+    sheet.append(["Excel 用例", "p2uniqueexpected", "p2_expected.txt", "p2_expected.txt", "部署;回滚"])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+
+    _login(client, "admin")
+    set_id = client.post("/api/retrieval-lab/evaluation-sets", json={"name": "Excel 导入评测集"}).json()["id"]
+    response = client.post(
+        f"/api/retrieval-lab/evaluation-sets/{set_id}/import",
+        files={"file": ("cases.xlsx", buffer.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["created"] == 1
+    cases = client.get(f"/api/retrieval-lab/evaluation-sets/{set_id}/cases").json()["items"]
+    assert cases[0]["expected_document_ids"] == [str(p2_documents["expected"].id)]
+    assert cases[0]["expected_answer_keypoints"] == ["部署", "回滚"]
+    _logout(client)
+
+
+# ======================================================================
+# P2-1 检索准确性：改写/多查询/词典/元数据过滤/精排名次
+# ======================================================================
+
+class _FakeRewriter:
+    """测试替身：不访问真实模型，返回固定的改写与多查询结果。"""
+
+    def __init__(self, settings, config, ollama=None):
+        self.config = config
+
+    async def rewrite(self, question, history=None):
+        return QueryRewriteOutcome(
+            original=question, standalone_question="补全后的问题",
+            retrieval_query="改写检索词", queries=["改写检索词"],
+            used_context=bool(history), rewritten=True,
+        )
+
+    async def multi_query(self, retrieval_query):
+        return [retrieval_query, "多查询二", "多查询三"]
+
+
+def test_p2_query_rewrite_and_multi_query_in_answer(seeded):
+    _answer_cache.clear()
+    settings = Settings()
+    settings.answer_cache_enabled = True
+    service, _ = _service_for(seeded["admin"].id, settings=settings)
+    service.config = RetrievalConfig(
+        query_rewrite_enabled=True, multi_query_enabled=True, multi_query_count=3,
+        dictionary_enabled=False,
+    )
+    service.rewrite_factory = _FakeRewriter
+    events = asyncio.run(_collect(service, AnswerRequest(
+        question="原始问题", history=[ConversationTurn(question="之前的问题", answer="之前的答案")],
+    )))
+    rewrite_events = _events(events, "query_rewrite")
+    assert rewrite_events, "应产生 query_rewrite 事件"
+    assert rewrite_events[0].query_rewrite.retrieval_query == "改写检索词"
+    metrics = _events(events, "metrics")[0].metrics
+    assert metrics["retrieval_query"] == "改写检索词"
+    assert metrics["retrieval_queries"] == ["改写检索词", "多查询二", "多查询三"]
+
+
+def test_p2_dictionary_crud_and_query_expansion(client, seeded, monkeypatch):
+    import app.services.search as search_module
+
+    monkeypatch.setattr(search_module, "EmbeddingService", lambda settings: _FakeEmbeddings())
+    _login(client, "admin")
+    created = client.post("/api/retrieval-lab/dictionaries", json={
+        "category": "SYNONYM", "term": "工单", "expansions": ["ticket", "服务单"],
+    })
+    assert created.status_code == 201, created.text
+    entry_id = created.json()["id"]
+
+    inspect = client.post("/api/retrieval-lab/inspect", json={"query": "工单处理流程", "limit": 5})
+    assert inspect.status_code == 200, inspect.text
+    assert "ticket" in inspect.json()["diagnostics"]["expanded_terms"]
+
+    duplicate = client.post("/api/retrieval-lab/dictionaries", json={
+        "category": "SYNONYM", "term": "工单", "expansions": [],
+    })
+    assert duplicate.status_code == 409
+
+    updated = client.patch(f"/api/retrieval-lab/dictionaries/{entry_id}", json={"expansions": ["ticket"]})
+    assert updated.status_code == 200
+    assert updated.json()["expansions"] == ["ticket"]
+
+    listed = client.get("/api/retrieval-lab/dictionaries").json()
+    assert any(item["term"] == "工单" for item in listed["items"])
+    assert client.delete(f"/api/retrieval-lab/dictionaries/{entry_id}").status_code == 204
+    _logout(client)
+
+
+@pytest.fixture(scope="module")
+def p2_metadata_docs(client, seeded):
+    ids: dict[str, object] = {}
+    with SessionLocal() as session:
+        now = datetime.now(UTC)
+
+        def make(name, owner=None, valid_from=None, valid_until=None, relative_path=None, version=1):
+            document = Document(
+                id=uuid.uuid4(), original_name=name, stored_path=f"test/{name}", relative_path=relative_path,
+                extension="txt", mime_type="text/plain", size_bytes=10, sha256=uuid.uuid4().hex,
+                status=DocumentStatus.READY, knowledge_base_id=DEFAULT_KNOWLEDGE_BASE_ID,
+                visibility=DocumentVisibility.COMPANY, enabled=True,
+                owner_user_id=owner.id if owner else None, valid_from=valid_from, valid_until=valid_until,
+                version_number=version,
+            )
+            session.add(document)
+            session.flush()
+            session.add(DocumentChunk(
+                document_id=document.id, sequence_number=1, content="metafilter token",
+                search_vector=func.to_tsvector("simple", "metafilter token"),
+            ))
+            return document
+
+        ids["active"] = make(
+            "meta_active.txt", owner=seeded["tech_user"], valid_from=now - timedelta(days=1),
+            valid_until=now + timedelta(days=1), relative_path="folder/active.txt", version=2,
+        )
+        ids["expired"] = make(
+            "meta_expired.txt", owner=seeded["hr_user"],
+            valid_until=now - timedelta(days=1), relative_path="folder/expired.txt",
+        )
+        ids["no_owner"] = make("meta_no_owner.txt", relative_path="other/no_owner.txt")
+        session.commit()
+    return ids
+
+
+def test_p2_metadata_filters(seeded, p2_metadata_docs):
+    with SessionLocal() as session:
+        service = SearchService(session, Settings(), user=session.get(User, seeded["admin"].id))
+
+        def ids_for(request: SearchRequest) -> set:
+            return {candidate.document.id for candidate in service._keyword_candidates("metafilter", request)}
+
+        owner_ids = ids_for(SearchRequest(query="metafilter", owner_user_id=seeded["tech_user"].id))
+        assert p2_metadata_docs["active"].id in owner_ids
+        assert p2_metadata_docs["expired"].id not in owner_ids
+
+        valid_ids = ids_for(SearchRequest(query="metafilter", valid_only=True))
+        assert p2_metadata_docs["active"].id in valid_ids
+        assert p2_metadata_docs["expired"].id not in valid_ids
+
+        path_ids = ids_for(SearchRequest(query="metafilter", relative_path="folder/"))
+        assert p2_metadata_docs["active"].id in path_ids
+        assert p2_metadata_docs["no_owner"].id not in path_ids
+
+        assert p2_metadata_docs["active"].id in ids_for(SearchRequest(query="metafilter", version_number=2))
+        assert p2_metadata_docs["active"].id in ids_for(
+            SearchRequest(query="metafilter", document_status=DocumentStatus.READY)
+        )
+
+        department_ids = ids_for(SearchRequest(query="metafilter", department_id=seeded["tech"].id))
+        assert p2_metadata_docs["active"].id in department_ids
+        assert p2_metadata_docs["expired"].id not in department_ids
+
+
+# ======================================================================
+# P2-2 回答可靠性：置信度、引用校验、无答案归因、可追溯引用
+# ======================================================================
+
+class _NoMatchEmbeddings:
+    """返回与所有已存向量都不相似的查询向量，用于构造“无召回”场景。"""
+
+    def encode_query(self, _text):
+        return [-1.0] + [0.0] * 1023
+
+    def encode_documents(self, texts):
+        return [self.encode_query(text) for text in texts]
+
+
+def test_p2_confidence_and_citation_events(seeded):
+    _answer_cache.clear()
+    service, _ = _service_for(seeded["admin"].id)
+    service.config = RetrievalConfig(dictionary_enabled=False)
+    events = asyncio.run(_collect(service, AnswerRequest(question="alpha secret")))
+    confidence = _events(events, "confidence")
+    citation = _events(events, "citation_check")
+    assert confidence, "应产生 confidence 事件"
+    assert confidence[0].confidence["tier"] in ("HIGH", "MEDIUM", "INSUFFICIENT")
+    assert citation, "有引用时应产生 citation_check 事件"
+    metrics = _events(events, "metrics")[0].metrics
+    assert metrics["confidence"]["tier"] == confidence[0].confidence["tier"]
+    assert metrics["question_type"]
+
+
+def test_p2_no_answer_when_nothing_matches(seeded):
+    service, _ = _service_for(seeded["hr_user"].id)
+    service.config = RetrievalConfig(dictionary_enabled=False)
+    service.search_service.embeddings = _NoMatchEmbeddings()
+    events = asyncio.run(_collect(service, AnswerRequest(question="zzzznomatchkeyword")))
+    no_answer = _events(events, "no_answer")
+    assert no_answer, "无召回时应产生 no_answer 事件"
+    assert no_answer[0].no_answer["reason"] == "NO_RELEVANT_DOCUMENT"
+    assert no_answer[0].no_answer["message"] == "当前可访问的公司资料中没有找到足够依据。"
+
+
+@pytest.fixture(scope="module")
+def p2_restricted_doc(client, seeded):
+    with SessionLocal() as session:
+        document = Document(
+            id=uuid.uuid4(), original_name="p2_restricted.txt", stored_path="test/p2_restricted.txt",
+            extension="txt", mime_type="text/plain", size_bytes=10, sha256=uuid.uuid4().hex,
+            status=DocumentStatus.READY, knowledge_base_id=DEFAULT_KNOWLEDGE_BASE_ID,
+            visibility=DocumentVisibility.ROLE, enabled=True,
+        )
+        session.add(document)
+        session.flush()
+        session.add(DocumentChunk(
+            document_id=document.id, sequence_number=1, content="p2restrictedtoken 机密内容",
+            search_vector=func.to_tsvector("simple", "p2restrictedtoken 机密内容"),
+        ))
+        session.add(DocumentAcl(
+            document_id=document.id, subject_type=SubjectType.ROLE,
+            subject_id=seeded["role"].id, permission=AclPermission.READ,
+        ))
+        session.commit()
+        return document.id
+
+
+def test_p2_no_answer_reason_permission_restricted(seeded, p2_restricted_doc):
+    service, _ = _service_for(seeded["other_user"].id)
+    service.config = RetrievalConfig(dictionary_enabled=False)
+    service.search_service.embeddings = _NoMatchEmbeddings()
+    events = asyncio.run(_collect(service, AnswerRequest(question="p2restrictedtoken")))
+    no_answer = _events(events, "no_answer")
+    assert no_answer, "无权限命中时应产生 no_answer 事件"
+    assert no_answer[0].no_answer["reason"] == "PERMISSION_RESTRICTED"
+    # 不得泄露无权访问文档的名称。
+    assert "p2_restricted" not in json.dumps(no_answer[0].no_answer, ensure_ascii=False)
+
+
+def test_p2_hydrate_source_traceability(seeded):
+    with SessionLocal() as session:
+        user = session.get(User, seeded["tech_user"].id)
+        chat = ChatService(session, user=user)
+        row = chat.create("追溯测试")
+        session.add(ChatMessage(
+            session_id=row.id, role=ChatMessageRole.USER, content="alpha secret",
+            status=ChatMessageStatus.COMPLETED,
+        ))
+        message = ChatMessage(
+            session_id=row.id, role=ChatMessageRole.ASSISTANT, content="答案 [1]",
+            status=ChatMessageStatus.COMPLETED,
+        )
+        session.add(message)
+        session.flush()
+        chunk_id = session.scalar(
+            select(DocumentChunk.id).where(DocumentChunk.document_id == seeded["user_doc"].id).limit(1)
+        )
+        source = ChatMessageSource(
+            message_id=message.id, document_id=seeded["user_doc"].id, chunk_id=chunk_id,
+            citation_number=1, document_name="user_doc.txt", content_snapshot="alpha secret 内容",
+            location_snapshot={"text": "片段 1"}, score=0.9,
+        )
+        session.add(source)
+        session.commit()
+        hydrated = ChatService(session, user=user).hydrate_source(source)
+    assert hydrated["version_number"] == 1
+    assert hydrated["can_download"] is True
+    assert "alpha" in hydrated["matched_keywords"]
+
+
+def test_p2_missing_knowledge_feedback_reason(client, seeded):
+    with SessionLocal() as session:
+        user = session.get(User, seeded["tech_user"].id)
+        chat = ChatService(session, user=user)
+        row = chat.create("缺失知识反馈")
+        message = ChatMessage(
+            session_id=row.id, role=ChatMessageRole.ASSISTANT, content="没有足够依据",
+            status=ChatMessageStatus.COMPLETED,
+        )
+        session.add(message)
+        session.commit()
+        message_id = message.id
+    _login(client, "tech_user")
+    response = client.post("/api/feedback", json={
+        "message_id": str(message_id), "rating": "DOWN", "reasons": ["缺失知识"],
+    })
+    assert response.status_code == 201, response.text
+    _logout(client)
+
+
+def test_p2_general_knowledge_answer_is_preserved(seeded, external_docs):
+    service, deepseek = _service_for(seeded["admin"].id)
+    service.config = RetrievalConfig(dictionary_enabled=False)
+    service.search_service.embeddings = _NoMatchEmbeddings()
+    events = asyncio.run(_collect(service, AnswerRequest(
+        question="zzzznomatchkeyword", assistant_id=external_docs["assistant_id"],
+    )))
+    assert deepseek.calls, "允许外发且无内部资料时应调用 DeepSeek 通用知识"
+    text = "".join(event.text or "" for event in _events(events, "delta"))
+    assert "外部增强答案" in text
+    # 通用知识答案不应被固定提示覆盖，但仍给出无答案归因。
+    assert "当前可访问的公司资料中没有找到足够依据。" not in text
+    assert _events(events, "no_answer")
+
+
+# ======================================================================
+# P2-3 助手角色增强
+# ======================================================================
+
+def test_p3_preset_assistants_seeded(client, seeded):
+    _login(client, "admin")
+    names = {item["name"] for item in client.get("/api/assistants").json()["items"]}
+    for preset in (
+        "康师傅综合助手", "人事制度助手", "技术研发助手",
+        "产品资料助手", "运维助手", "项目进度助手",
+    ):
+        assert preset in names, f"缺少预置助手：{preset}"
+    _logout(client)
+
+
+def test_p3_assistant_new_fields_and_welcome(client, seeded):
+    _login(client, "admin")
+    created = client.post("/api/assistants", json={
+        "name": "P3 制度助手", "answer_template": "POLICY", "no_answer_policy": "STRICT",
+        "internet_enabled": True, "capabilities": ["解读制度"], "limitations": ["不提供法律意见"],
+    })
+    assert created.status_code == 200, created.text
+    body = created.json()
+    assert body["answer_template"] == "POLICY"
+    assert body["no_answer_policy"] == "STRICT"
+    assert body["internet_enabled"] is True
+    assert body["capabilities"] == ["解读制度"]
+
+    welcome = client.get(f"/api/assistants/{body['id']}/welcome")
+    assert welcome.status_code == 200, welcome.text
+    payload = welcome.json()
+    assert payload["capabilities"] == ["解读制度"]
+    assert payload["limitations"] == ["不提供法律意见"]
+    assert payload["knowledge_scope"]
+    assert payload["internet_enabled"] is True
+    _logout(client)
+
+
+def test_p3_answer_template_and_strict_policy(client, seeded):
+    _login(client, "admin")
+    created = client.post("/api/assistants", json={
+        "name": "P3 严格制度助手", "answer_template": "POLICY", "no_answer_policy": "STRICT",
+        "deepseek_enabled": True, "use_deepseek_allowed": True,
+    })
+    assistant_id = created.json()["id"]
+    _logout(client)
+
+    service, _ = _service_for(seeded["admin"].id)
+    service.config = RetrievalConfig(dictionary_enabled=False)
+    events = asyncio.run(_collect(service, AnswerRequest(question="alpha secret", assistant_id=assistant_id)))
+    metrics = _events(events, "metrics")[0].metrics
+    assert metrics["question_type"] == "POLICY"
+    assert metrics["question_type_label"] == "制度问题"
+
+    service2, _ = _service_for(seeded["admin"].id)
+    service2.config = RetrievalConfig(dictionary_enabled=False)
+    service2.search_service.embeddings = _NoMatchEmbeddings()
+    events2 = asyncio.run(_collect(service2, AnswerRequest(question="zzzznomatch", assistant_id=assistant_id)))
+    no_answer = _events(events2, "no_answer")[0].no_answer
+    # 严格策略：不推荐资料、不允许通用知识补答。
+    assert no_answer["allow_deepseek"] is False
+    assert no_answer["recommended_documents"] == []
+
+
+# ======================================================================
+# P2-4 轻量 Chatflow
+# ======================================================================
+
+def test_p4_chatflow_crud_publish_rollback(client, seeded):
+    _login(client, "admin")
+    created = client.post("/api/chatflows", json={"name": "P4 流程"})
+    assert created.status_code == 201, created.text
+    flow = created.json()
+    flow_id = flow["id"]
+    assert flow["published_version"] == 0
+    assert {node["type"] for node in flow["draft_graph"]["nodes"]} >= {"start", "retrieval", "final_answer"}
+
+    graph = flow["draft_graph"]
+    for node in graph["nodes"]:
+        if node["type"] == "rerank":
+            node["enabled"] = False
+    patched = client.patch(f"/api/chatflows/{flow_id}", json={"graph": graph})
+    assert patched.status_code == 200
+
+    published = client.post(f"/api/chatflows/{flow_id}/publish", json={"note": "关闭精排"})
+    assert published.status_code == 200, published.text
+    assert published.json()["version"] == 1
+    detail = client.get(f"/api/chatflows/{flow_id}").json()
+    assert detail["published_version"] == 1
+
+    versions = client.get(f"/api/chatflows/{flow_id}/versions").json()
+    assert len(versions) == 1
+    rollback = client.post(f"/api/chatflows/{flow_id}/rollback", json={"version": 1})
+    assert rollback.status_code == 200
+    _logout(client)
+
+
+def test_p4_chatflow_debug_run(client, seeded, monkeypatch):
+    import app.services.search as search_module
+
+    monkeypatch.setattr(search_module, "EmbeddingService", lambda settings: _FakeEmbeddings())
+    _login(client, "admin")
+    flows = client.get("/api/chatflows").json()["items"]
+    default = next(item for item in flows if item["name"] == "默认流程")
+    response = client.post(f"/api/chatflows/{default['id']}/debug", json={"question": "alpha", "knowledge_base_id": None})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    types = [node["type"] for node in body["nodes"]]
+    assert "question_classify" in types and "retrieval" in types and "condition" in types
+    assert body["total_ms"] >= 0
+    for node in body["nodes"]:
+        assert node["status"] in ("succeeded", "skipped", "failed")
+        assert "duration_ms" in node
+    _logout(client)
+
+
+def test_p4_assistant_binds_chatflow(client, seeded):
+    _login(client, "admin")
+    flow = client.post("/api/chatflows", json={"name": "P4 绑定流程"}).json()
+    assistant = client.post("/api/assistants", json={"name": "P4 绑定助手", "chatflow_id": flow["id"]})
+    assert assistant.status_code == 200, assistant.text
+    assert assistant.json()["chatflow_id"] == flow["id"]
+
+    bad = client.post("/api/assistants", json={"name": "P4 坏绑定", "chatflow_id": str(uuid.uuid4())})
+    assert bad.status_code == 404
+    _logout(client)
+
+
+def test_p4_chatflow_requires_assistant_manage(client, seeded):
+    _login(client, "tech_user")
+    assert client.get("/api/chatflows").status_code == 403
+    assert client.post("/api/chatflows", json={"name": "x"}).status_code == 403
+    _logout(client)
+
+
+# ======================================================================
+# P2-5 用户体验与比赛展示
+# ======================================================================
+
+def test_p5_no_answer_records_knowledge_gap(client, seeded):
+    from fastapi import Request
+    from fastapi.params import Depends
+
+    from app.api.answer import get_rag_service
+    from app.config import Settings as AppSettings, get_settings
+    from app.db import get_session
+
+    class _FakeRag:
+        async def stream(self, request):
+            yield AnswerEvent(type="sources", sources=[])
+            yield AnswerEvent(type="delta", text="没有找到足够依据")
+            yield AnswerEvent(type="no_answer", no_answer={
+                "reason": "NO_RELEVANT_DOCUMENT", "message": "当前可访问的公司资料中没有找到足够依据。",
+            })
+            yield AnswerEvent(type="done", scope=KnowledgeScope.NONE)
+
+    def _fake_service(request: Request, session=Depends(get_session), settings: AppSettings = Depends(get_settings)):
+        return _FakeRag()
+
+    app = client.app
+    app.dependency_overrides[get_rag_service] = _fake_service
+    try:
+        _login(client, "admin")
+        response = client.post("/api/answer/stream", json={"question": "P5 未答缺口问题"})
+        assert response.status_code == 200, response.text
+        _logout(client)
+    finally:
+        app.dependency_overrides.pop(get_rag_service, None)
+
+    _login(client, "admin")
+    gaps = client.get("/api/knowledge-gaps", params={"reason": "NO_ANSWER"}).json()["items"]
+    assert any("P5 未答缺口问题" in item["question"] for item in gaps)
+    _logout(client)
+
+
+def test_p5_negative_feedback_records_gap(client, seeded):
+    with SessionLocal() as session:
+        user = session.get(User, seeded["tech_user"].id)
+        chat = ChatService(session, user=user)
+        row = chat.create("P5 反馈缺口")
+        session.add(ChatMessage(
+            session_id=row.id, role=ChatMessageRole.USER, content="P5 引用错误问题",
+            status=ChatMessageStatus.COMPLETED,
+        ))
+        message = ChatMessage(
+            session_id=row.id, role=ChatMessageRole.ASSISTANT, content="错误答案 [1]",
+            status=ChatMessageStatus.COMPLETED,
+        )
+        session.add(message)
+        session.commit()
+        message_id = message.id
+
+    _login(client, "tech_user")
+    response = client.post("/api/feedback", json={
+        "message_id": str(message_id), "rating": "DOWN", "reasons": ["引用不正确"],
+    })
+    assert response.status_code == 201, response.text
+    _logout(client)
+
+    _login(client, "admin")
+    gaps = client.get("/api/knowledge-gaps", params={"reason": "WRONG_DOCUMENT"}).json()["items"]
+    assert any("P5 引用错误问题" in item["question"] for item in gaps)
+    gap_id = next(item["id"] for item in gaps if "P5 引用错误问题" in item["question"])
+
+    statistics = client.get("/api/knowledge-gaps/statistics").json()
+    assert statistics["total"] >= 1
+
+    updated = client.patch(f"/api/knowledge-gaps/{gap_id}", json={
+        "status": "RESOLVED", "linked_document_ids": [str(seeded["company_doc"].id)], "note": "已补充资料",
+    })
+    assert updated.status_code == 200, updated.text
+    body = updated.json()
+    assert body["status"] == "RESOLVED"
+    assert body["linked_document_ids"] == [str(seeded["company_doc"].id)]
+    _logout(client)
+
+
+def test_p5_dashboard_overview(client, seeded):
+    _login(client, "tech_user")
+    response = client.get("/api/stats/dashboard")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    for key in (
+        "knowledge_base_count", "document_count", "chunk_count", "questions_today",
+        "avg_response_ms", "citation_coverage", "satisfaction", "hot_questions", "knowledge_gap_count",
+    ):
+        assert key in body
+    _logout(client)
+
+
+def test_p5_answer_emits_stage_detail_and_suggestions(seeded):
+    _answer_cache.clear()
+    service, _ = _service_for(seeded["admin"].id)
+    service.config = RetrievalConfig(dictionary_enabled=False)
+    events = asyncio.run(_collect(service, AnswerRequest(question="alpha secret")))
+    stage_events = _events(events, "stage")
+    stages = {event.stage for event in stage_events}
+    assert {"understanding", "retrieving", "candidates", "local_generating"} <= stages
+    candidates = next(event for event in stage_events if event.stage == "candidates")
+    assert isinstance(candidates.detail, dict)
+    suggestions = _events(events, "suggestions")
+    assert suggestions and suggestions[0].suggestions
+
+
+# ======================================================================
+# P2-6 文档理解能力
+# ======================================================================
+
+@pytest.fixture(scope="module")
+def p26_document(client, seeded):
+    settings = Settings()
+    settings.ensure_directories()
+    path = settings.originals_root / "p26_preview.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("第一段内容。\n\n第二段内容。\n\n第三段内容。", encoding="utf-8")
+    relative = path.relative_to(settings.library_root).as_posix()
+    with SessionLocal() as session:
+        document = Document(
+            id=uuid.uuid4(), original_name="p26_preview.txt", stored_path=relative,
+            extension="txt", mime_type="text/plain", size_bytes=path.stat().st_size,
+            sha256=uuid.uuid4().hex, status=DocumentStatus.READY,
+            knowledge_base_id=DEFAULT_KNOWLEDGE_BASE_ID, visibility=DocumentVisibility.COMPANY,
+            enabled=True, owner_user_id=seeded["tech_user"].id,
+        )
+        session.add(document)
+        session.commit()
+        return document.id
+
+
+def test_p6_chunk_preview(client, seeded, p26_document):
+    _login(client, "tech_user")
+    response = client.post(
+        f"/api/documents/{p26_document}/chunk-preview",
+        json={"chunking_config": {"strategy": "paragraph"}, "limit": 20},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] >= 1
+    assert body["config"]["strategy"] == "paragraph"
+    assert all(item["length"] == len(item["content"]) for item in body["items"])
+    _logout(client)
+
+
+def test_p6_knowledge_base_chunking_config(client, seeded):
+    _login(client, "admin")
+    created = client.post("/api/knowledge-bases", json={
+        "name": "P6 切片库",
+        "chunking_config": {"strategy": "heading", "target": 500, "maximum": 900, "overlap": 80},
+    })
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["chunking_config"]["strategy"] == "heading"
+
+    updated = client.patch(f"/api/knowledge-bases/{body['id']}", json={
+        "chunking_config": {"strategy": "parent_child", "row_batch": 10},
+    })
+    assert updated.status_code == 200
+    assert updated.json()["chunking_config"]["strategy"] == "parent_child"
+    _logout(client)
+
+
+def test_p6_document_graph_metadata(client, seeded):
+    _login(client, "admin")
+    response = client.patch(f"/api/documents/{seeded['company_doc'].id}", json={
+        "author": "张三", "department_id": str(seeded["tech"].id), "topic": "气泡检测",
+        "related_document_ids": [str(seeded["user_doc"].id)],
+    })
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["author"] == "张三"
+    assert body["department_id"] == str(seeded["tech"].id)
+    assert body["topic"] == "气泡检测"
+    assert body["related_document_ids"] == [str(seeded["user_doc"].id)]
+    _logout(client)

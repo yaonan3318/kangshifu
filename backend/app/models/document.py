@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Integer, String, Text, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -63,9 +63,19 @@ class Document(Base):
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # P2-6 文档理解：作者/部门/主题/关联文档，为知识图谱与实体关系检索保留基础数据。
+    author: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("departments.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    topic: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    related_document_ids: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
     # 敏感级别与是否允许发送外部大模型；RESTRICTED/CONFIDENTIAL 或禁止外发时只允许本地千问回答。
     sensitivity_level: Mapped[str] = mapped_column(String(32), default="INTERNAL")
     external_llm_allowed: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 文档有效期；为空表示不限制，检索可据此过滤失效资料。
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     metadata_json: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

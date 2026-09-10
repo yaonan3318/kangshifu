@@ -2,7 +2,20 @@ import { ApiError } from './documents'
 import type { ApiErrorBody } from '../types/documents'
 import type { SearchResponse } from '../types/search'
 
-export interface SearchFilters { extension: string; documentName: string; createdFrom: string; createdTo: string; knowledgeBaseId?:string; tags?:string[] }
+export interface SearchFilters {
+  extension: string
+  documentName: string
+  createdFrom: string
+  createdTo: string
+  knowledgeBaseId?: string
+  tags?: string[]
+  departmentId?: string
+  ownerUserId?: string
+  documentStatus?: string
+  relativePath?: string
+  versionNumber?: string
+  validOnly?: boolean
+}
 
 export async function searchDocuments(query: string, filters: SearchFilters): Promise<SearchResponse> {
   const response = await fetch('/api/search', {
@@ -12,6 +25,10 @@ export async function searchDocuments(query: string, filters: SearchFilters): Pr
       query, extension: filters.extension || null, document_name: filters.documentName.trim() || null,
       created_from: filters.createdFrom || null, created_to: filters.createdTo || null, limit: 10,
       knowledge_base_id: filters.knowledgeBaseId || null, tags: filters.tags || [],
+      department_id: filters.departmentId || null, owner_user_id: filters.ownerUserId || null,
+      document_status: filters.documentStatus || null, relative_path: filters.relativePath || null,
+      version_number: filters.versionNumber ? Number(filters.versionNumber) : null,
+      valid_only: filters.validOnly ?? false,
     }),
   })
   if (response.ok) return response.json()

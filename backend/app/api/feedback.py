@@ -18,12 +18,14 @@ from app.models import (
 from app.models.chat import ChatSession
 from app.services.audit import audit_action
 from app.services.feedback_ranking import FeedbackRankingService
+from app.services.knowledge_gaps import record_gap
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 
 DOWN_REASONS = [
     "答非所问", "内容不准确", "引用不正确", "资料已经过期",
     "回答不完整", "没有找到已有资料", "回答速度太慢",
+    "缺失知识", "资料不足", "举报敏感或错误内容",
 ]
 
 
@@ -266,6 +268,14 @@ def create_feedback(
             citation_number=citation_number,
         ))
     session.commit()
+    # P2-5：点踩或“引用不正确”自动进入知识缺口中心。
+    if rating == FeedbackRating.DOWN:
+        question = _question_for(session, message) or ""
+        wrong = any("引用" in str(item) for item in (body.reasons or []))
+        record_gap(
+            session, question, "WRONG_DOCUMENT" if wrong else "NEGATIVE_FEEDBACK",
+            message_id=message.id, answer=message.content,
+        )
     # 评分可能变化，需重算所有曾关联文档，避免旧统计残留。
     service = FeedbackRankingService(session, request.app.state.settings)
     for affected_id in previous_documents | set(source_document_ids):

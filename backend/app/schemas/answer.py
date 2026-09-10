@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.search import QueryRewriteInfo
+
 
 class ConversationTurn(BaseModel):
     question: str = Field(min_length=1, max_length=1000)
@@ -30,6 +32,9 @@ class AnswerRequest(BaseModel):
     document_name: str | None = Field(default=None, max_length=200)
     created_from: date | None = None
     created_to: date | None = None
+    # P2-1 检索增强开关；为空时使用检索配置版本中的设置。
+    use_query_rewrite: bool | None = None
+    use_multi_query: bool | None = None
 
 
 class KnowledgeScope(str, Enum):
@@ -50,6 +55,7 @@ class AnswerSource(BaseModel):
     document_id: uuid.UUID
     document_name: str
     extension: str
+    document_version: int | None = None
     sequence_number: int
     content: str
     page_start: int | None
@@ -84,13 +90,21 @@ class AnswerStatusResponse(BaseModel):
 class AnswerEvent(BaseModel):
     type: Literal[
         "stage", "sources", "delta", "replace", "warning", "metrics", "done", "error",
+        "query_rewrite", "confidence", "citation_check", "no_answer", "suggestions",
         "harness_started", "tool_requested", "tool_running", "tool_result",
         "approval_required", "approval_result", "harness_done",
     ]
     stage: str | None = None
+    detail: dict[str, Any] | None = None
+    suggestions: list[str] | None = None
     provider: AnswerProvider | None = None
     text: str | None = None
     sources: list[AnswerSource] | None = None
+    query_rewrite: QueryRewriteInfo | None = None
+    confidence: dict[str, Any] | None = None
+    citation_check: dict[str, Any] | None = None
+    no_answer: dict[str, Any] | None = None
+    question_type: str | None = None
     warning: AnswerWarning | None = None
     metrics: dict[str, Any] | None = None
     scope: KnowledgeScope | None = None

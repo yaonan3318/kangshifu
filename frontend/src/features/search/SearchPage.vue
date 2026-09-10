@@ -20,8 +20,15 @@ const diagnostics = ref<SearchDiagnostics|null>(null)
 const knowledgeBases=ref<KnowledgeBaseRecord[]>([])
 const knowledgeBaseId=ref('')
 const tags=ref('')
+const departmentId=ref('')
+const ownerUserId=ref('')
+const documentStatus=ref('')
+const relativePath=ref('')
+const versionNumber=ref('')
+const validOnly=ref(false)
 
 const types = ['pdf', 'docx', 'xlsx', 'pptx', 'txt', 'md', 'csv', 'png', 'jpg']
+const statuses = ['READY', 'PENDING', 'PARSING', 'INDEX_FAILED', 'PARSE_FAILED']
 const matchLabels = { keyword: '关键词', vector: '语义', hybrid: '混合命中' }
 
 function sourceLabel(item: SearchResult): string {
@@ -44,6 +51,9 @@ async function search() {
       extension: extension.value, documentName: documentName.value,
       createdFrom: createdFrom.value, createdTo: createdTo.value,
       knowledgeBaseId:knowledgeBaseId.value,tags:tags.value.split(',').map(x=>x.trim()).filter(Boolean),
+      departmentId: departmentId.value.trim(), ownerUserId: ownerUserId.value.trim(),
+      documentStatus: documentStatus.value, relativePath: relativePath.value.trim(),
+      versionNumber: versionNumber.value, validOnly: validOnly.value,
     })
     results.value = response.items
     diagnostics.value=response.diagnostics
@@ -73,7 +83,7 @@ onMounted(async()=>{try{knowledgeBases.value=(await listKnowledgeBases()).items}
         <button type="submit" :disabled="loading || !query.trim()">{{ loading ? '检索中…' : '开始检索' }}</button>
         <details class="advanced-filters">
           <summary>更多筛选</summary>
-          <div><label><span>文件名包含</span><input v-model="documentName" type="text" placeholder="可选"></label><label><span>标签</span><input v-model="tags" placeholder="多个标签用逗号分隔"></label><label><span>开始日期</span><input v-model="createdFrom" type="date"></label><label><span>结束日期</span><input v-model="createdTo" type="date"></label></div>
+          <div><label><span>文件名包含</span><input v-model="documentName" type="text" placeholder="可选"></label><label><span>标签</span><input v-model="tags" placeholder="多个标签用逗号分隔"></label><label><span>开始日期</span><input v-model="createdFrom" type="date"></label><label><span>结束日期</span><input v-model="createdTo" type="date"></label><label><span>文档状态</span><select v-model="documentStatus"><option value="">全部状态</option><option v-for="item in statuses" :key="item" :value="item">{{ item }}</option></select></label><label><span>文件夹路径</span><input v-model="relativePath" type="text" placeholder="如 技术部/"></label><label><span>文档版本</span><input v-model="versionNumber" type="number" min="1" placeholder="可选"></label><label><span>部门 ID</span><input v-model="departmentId" type="text" placeholder="可选，UUID"></label><label><span>上传人 ID</span><input v-model="ownerUserId" type="text" placeholder="可选，UUID"></label><label class="admin-check-row"><input v-model="validOnly" type="checkbox"><span>仅看有效期内的文档</span></label></div>
         </details>
       </form>
       <p v-if="error" class="error" role="alert">{{ error }}</p>

@@ -17,6 +17,10 @@ class ParsedBlock:
     row_end: int | None = None
     section_path: list[str] = field(default_factory=list)
     ocr_confidence: float | None = None
+    # P2-6：block_type 供切片策略区分正文/标题/表格/图注；chunk_role 标记父子切片。
+    block_type: str = "text"
+    chunk_role: str = "normal"
+    parent_sequence_number: int | None = None
 
 
 class DocumentParser(Protocol):

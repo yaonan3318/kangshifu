@@ -136,6 +136,30 @@ curl -X POST http://127.0.0.1:8000/api/search \
 
 结果中的 `match_type` 为 `keyword`、`vector` 或 `hybrid`，分别表示关键词命中、语义命中或两路同时命中。`content` 已来自数据库中的解析片段，检索时不会重新读取附件。
 
+P2-1 起支持结构化元数据过滤（权限过滤始终先执行）：
+
+```json
+{
+  "query": "Kubernetes 部署流程",
+  "knowledge_base_id": "…",
+  "extension": "docx",
+  "tags": ["运维"],
+  "department_id": "…",
+  "owner_user_id": "…",
+  "created_from": "2026-01-01",
+  "created_to": "2026-12-31",
+  "relative_path": "技术部/",
+  "version_number": 2,
+  "document_status": "READY",
+  "valid_only": true,
+  "limit": 10
+}
+```
+
+当默认检索配置版本开启 Query Rewrite / Multi-query 时，服务会先做上下文补全与查询改写，
+再分别召回并做 RRF 融合；`diagnostics.queries` 返回实际使用的检索表达，`diagnostics.retrieval_query`
+返回改写后的主查询。`SearchResult` 额外返回 `pre_rerank_rank` / `post_rerank_rank`（重排前后名次）。
+
 ## RAG 知识问答
 
 ### `GET /api/answer/status`
@@ -169,16 +193,118 @@ SSE 每个消息包含 `event:` 类型和 `data:` JSON。可能出现：
 | 事件 | 说明 |
 | --- | --- |
 | `stage` | 当前处于检索、本地生成或 DeepSeek 增强阶段 |
+| `query_rewrite` | P2-1：原始问题、补全后问题、实际检索问题与多查询列表 |
 | `sources` | 本次回答使用的内部片段和引用编号 |
 | `delta` | 追加到页面的答案文本 |
-| `replace` | 清空当前答案，接下来用增强答案替换 |
+| `replace` | 清空当前答案，接下来用增强/修正后的答案替换 |
 | `warning` | DeepSeek 未配置或远端失败等可降级问题 |
+| `confidence` | P2-2：答案置信度分级（`HIGH`/`MEDIUM`/`INSUFFICIENT`）与原因 |
+| `citation_check` | P2-2：引用校验结果（无效编号、缺少依据的句子、不可访问引用） |
+| `no_answer` | P2-2：无答案/低置信度归因、固定提示、推荐资料与后续操作 |
 | `done` | 正常结束，包含 provider、scope 和来源数量 |
 | `error` | 本地模型等关键步骤失败，无法继续回答 |
 
-典型本地流程是 `stage(retrieving) → sources → stage(local_generating) → delta... → done`。DeepSeek 增强成功时会继续出现 `stage(deepseek_enhancing) → replace → delta... → done`。
+典型本地流程是 `stage(retrieving) → sources → stage(local_generating) → delta... → done`。DeepSeek 增强成功时会继续出现 `stage(deepseek_enhancing) → replace → delta... → done`。P2-2 在生成结束后追加 `confidence` / `citation_check`，资料不足时追加 `no_answer` 并用固定提示替换答案（缺少依据的句子标记为“推断”）。
+
+`chat_messages.metrics` 会保存 `confidence`、`citation_check`、`no_answer`、`question_type` 等字段，历史引用接口额外返回 `version_number`、`matched_keywords`、`can_download`、`extension` 供追溯展示。
 
 `scope` 表示答案依据：`INTERNAL` 为较明确的内部资料，`INTERNAL_LIMITED` 为有限的语义证据，`GENERAL` 为无内部资料时的 DeepSeek 通用知识，`NONE` 为未找到内部答案。DeepSeek 未配置或调用失败时会发送 `warning`，并保留千问本地答案。
+
+## 助手接口
+
+```text
+GET    /api/assistants                 # 列出助手（任意登录用户）
+GET    /api/assistants/{id}            # 助手详情
+GET    /api/assistants/{id}/welcome    # 欢迎页：能力/限制/资料范围/最近热门问题
+POST   /api/assistants                 # 新建（ASSISTANT_MANAGE）
+PATCH  /api/assistants/{id}            # 编辑（ASSISTANT_MANAGE）
+POST   /api/assistants/{id}/enable|disable
+PUT    /api/assistants/{id}/knowledge-bases
+DELETE /api/assistants/{id}
+```
+
+助手可配置 `answer_template`（`AUTO`/`POLICY`/`TECHNICAL`/`PROGRESS`/`COMPARISON`/`SUMMARY`/`GENERAL`）、
+`no_answer_policy`（`SUGGEST`/`STRICT`/`GENERAL`）、`internet_enabled`、`capabilities`、`limitations`，
+以及知识库范围、召回数量、温度、DeepSeek/Harness 策略。问答请求只需传 `assistant_id`，
+运行策略由服务端助手配置决定，用户端不展示这些技术选项。
+
+`GET /api/assistants/{id}/welcome` 返回：能做什么、不能做什么、推荐问题、可访问资料范围
+（`knowledge_scope`）、最近热门问题、是否允许通用知识（`general_knowledge_allowed`）与
+运维任务（`operations_allowed`，仅管理员为 true）。
+
+## 文档理解与切片
+
+按知识库配置切片策略（`chunking_config`，随 `POST/PATCH /api/knowledge-bases` 提交）：
+
+```json
+{
+  "strategy": "parent_child",
+  "target": 800,
+  "maximum": 1200,
+  "overlap": 100,
+  "min_chars": 40,
+  "row_batch": 30
+}
+```
+
+`strategy` 可选：`fixed` / `heading` / `paragraph` / `page` / `table` / `parent_child`。
+表格策略按 `row_batch` 行分块，避免超长表格生成过大片段。
+
+切片预览（不写入数据库，可临时覆盖配置）：
+
+```text
+POST /api/documents/{id}/chunk-preview
+body: { "chunking_config": {...}?, "limit": 50 }
+```
+
+文档图谱元数据（随 `PATCH /api/documents/{id}` 提交）：`author`、`department_id`、`topic`、
+`related_document_ids`、`valid_from`、`valid_until`；响应同样返回这些字段。
+
+## 首页与知识缺口
+
+首页看板（登录即可查看，仅汇总计数）：
+
+```text
+GET /api/stats/dashboard
+```
+
+返回：知识库数量、文档数量、可检索片段、今日问答、平均响应时间、引用覆盖率、用户满意度、
+热门问题、知识缺口数量。
+
+知识缺口中心（`STATS_VIEW`）：
+
+```text
+GET   /api/knowledge-gaps?status=&reason=&assignee_user_id=
+GET   /api/knowledge-gaps/statistics
+GET   /api/knowledge-gaps/{id}
+PATCH /api/knowledge-gaps/{id}          # 状态/负责人/关联文档/说明
+POST  /api/knowledge-gaps/{id}/rerun    # 重新运行并返回修复前后对比
+```
+
+未答、低置信度、点踩与“引用不正确”会自动进入知识缺口中心（去重累加）。
+
+## 流程接口（Chatflow）
+
+全部需要 `ASSISTANT_MANAGE` 权限。
+
+```text
+GET    /api/chatflows
+POST   /api/chatflows
+GET    /api/chatflows/node-types
+GET    /api/chatflows/{id}
+PATCH  /api/chatflows/{id}                 # 保存草稿（名称/描述/图/启停）
+DELETE /api/chatflows/{id}
+POST   /api/chatflows/{id}/publish         # 发布草稿为新版本
+POST   /api/chatflows/{id}/rollback        # 回滚到指定历史版本
+GET    /api/chatflows/{id}/versions
+GET    /api/chatflows/{id}/versions/{version}
+POST   /api/chatflows/{id}/debug           # 调试运行，返回逐节点耗时/状态/输出
+```
+
+图结构为固定画布：`{"start_node_id": "start", "nodes": [{id,type,name,enabled,config,next}]}`；
+条件节点用 `config.branches`（`when` → `next`）与 `config.default_next` 分支。助手通过
+`chatflow_id` 绑定已发布流程，问答时按节点开关执行，并把逐节点耗时写入
+`chat_messages.metrics.node_timings`。
 
 ## 批量导入接口
 
@@ -270,15 +396,56 @@ POST   /api/chunks/{id}/restore-original
 
 ## 检索实验室接口
 
+全部需要 `RETRIEVAL_LAB_USE` 权限。
+
+诊断（可选传入最近对话以演示上下文补全）：
+
 ```text
-POST   /api/retrieval-lab/inspect
-GET    /api/retrieval-lab/cases
-POST   /api/retrieval-lab/cases
-PATCH  /api/retrieval-lab/cases/{id}
-DELETE /api/retrieval-lab/cases/{id}
-POST   /api/retrieval-lab/runs
-GET    /api/retrieval-lab/runs
-GET    /api/retrieval-lab/runs/{id}
+POST   /api/retrieval-lab/inspect   # body: query, knowledge_base_id?, limit?, history?
 ```
 
-`inspect` 返回规范化问题、扩展词、实际模式、降级提示、耗时，以及关键词、向量、RRF、精排和最终上下文各阶段候选。普通 `/api/search` 不返回长阶段明细，只返回最终结果和简要诊断。
+中文检索词典（管理员维护同义词/缩写/专有名词）：
+
+```text
+GET    /api/retrieval-lab/dictionaries?category=&enabled=
+POST   /api/retrieval-lab/dictionaries
+PATCH  /api/retrieval-lab/dictionaries/{id}
+DELETE /api/retrieval-lab/dictionaries/{id}
+```
+
+评测集与标准问题：
+
+```text
+GET    /api/retrieval-lab/evaluation-sets
+POST   /api/retrieval-lab/evaluation-sets
+GET    /api/retrieval-lab/evaluation-sets/{id}
+PATCH  /api/retrieval-lab/evaluation-sets/{id}
+DELETE /api/retrieval-lab/evaluation-sets/{id}
+GET    /api/retrieval-lab/evaluation-sets/{id}/cases
+POST   /api/retrieval-lab/evaluation-sets/{id}/cases
+POST   /api/retrieval-lab/evaluation-sets/{id}/import   # multipart CSV/Excel
+PATCH  /api/retrieval-lab/cases/{id}
+DELETE /api/retrieval-lab/cases/{id}
+```
+
+检索配置版本：
+
+```text
+GET    /api/retrieval-lab/config-versions
+POST   /api/retrieval-lab/config-versions
+GET    /api/retrieval-lab/config-versions/{id}
+PATCH  /api/retrieval-lab/config-versions/{id}
+DELETE /api/retrieval-lab/config-versions/{id}
+GET    /api/retrieval-lab/config-versions/compare?left=&right=
+```
+
+运行与对比：
+
+```text
+POST   /api/retrieval-lab/runs            # body: evaluation_set_id, config_version_id?, limit?, include_answers?
+GET    /api/retrieval-lab/runs?evaluation_set_id=
+GET    /api/retrieval-lab/runs/{id}
+GET    /api/retrieval-lab/runs/compare?left=&right=
+```
+
+`inspect` 返回规范化问题、扩展词、实际模式、降级提示、耗时，以及关键词、向量、RRF、精排和最终上下文各阶段候选；开启改写时额外返回 `query_rewrite`（原始问题、补全后问题、实际检索问题、是否使用上下文）与 `queries`（多查询列表）。运行记录保存配置快照与逐用例明细；`runs/compare` 返回指标变化、配置差异与逐用例变化。CSV/Excel 导入表头支持中英文别名，文档列可用 UUID 或文件名。

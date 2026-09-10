@@ -21,9 +21,11 @@ from app.schemas.answer import AnswerEvent, AnswerRequest, AnswerStatusResponse
 from app.services.chat import AnswerRecorder, ChatService
 from app.services.audit import record as audit_record
 from app.services.harness import HarnessService
+from app.services.knowledge_gaps import record_gap
 from app.services.permissions import require_user
 from app.services.rag import RagService
 from app.services.rbac import require_permission
+from app.services.retrieval_config import load_active_config
 
 router = APIRouter(prefix="/api/answer", tags=["answer"])
 
@@ -36,8 +38,13 @@ def get_rag_service(
     session: Annotated[Session, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> RagService:
-    """为当前请求创建 RAG 编排服务，并复用请求级数据库 Session。"""
-    return RagService(session, settings, user=getattr(request.state, "auth_user", None))
+    """为当前请求创建 RAG 编排服务，并复用请求级数据库 Session。
+
+    使用默认检索配置版本（含 Query Rewrite / Multi-query / Reranker 设置），
+    使管理页面保存的配置对问答立即生效。
+    """
+    config = load_active_config(session, settings)
+    return RagService(session, settings, user=getattr(request.state, "auth_user", None), config=config)
 
 
 def encode_sse(event: AnswerEvent) -> str:
@@ -196,6 +203,20 @@ async def answer_stream(
                             ip_address=ip_address, request_id=request_id,
                         )
                     finalized = True
+                elif event.type == "no_answer" and event.no_answer:
+                    # P2-5：无答案/低置信度自动进入知识缺口中心。
+                    reason_map = {
+                        "NO_RELEVANT_DOCUMENT": "NO_ANSWER",
+                        "LOW_RELEVANCE": "LOW_CONFIDENCE",
+                        "PERMISSION_RESTRICTED": "PERMISSION_RESTRICTED",
+                    }
+                    mapped = reason_map.get(event.no_answer.get("reason"))
+                    if mapped:
+                        record_gap(
+                            session, body.question, mapped,
+                            message_id=recorder.assistant.id if recorder.assistant else None,
+                            answer="".join(text_parts),
+                        )
                 elif event.type == "harness_done":
                     content = "".join(text_parts)
                     recorder.complete(content, ChatProvider.HARNESS, "INTERNAL", sources, metrics=metrics_payload)
