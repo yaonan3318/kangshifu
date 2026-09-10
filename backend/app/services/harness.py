@@ -128,6 +128,12 @@ class HarnessService:
                 step.status, step.error_code, step.error_message = HarnessStepStatus.FAILED, "TOOL_FAILED", str(exc)
                 task.history = [*task.history, {"tool": tool.name, "error": str(exc)}]
                 result_payload = {"success": False, "error": str(exc)}
+                audit_record(
+                    None, "harness_tool_failed", user=self.user,
+                    target_type="harness_task", target_id=task.id,
+                    detail={"tool": tool.name, "error_code": "TOOL_FAILED"},
+                    success=False, error_code="TOOL_FAILED",
+                )
             else:
                 if isinstance(result, PreparedOperation):
                     approval = ApprovalService(self.session, self.settings).create(task, step, result)

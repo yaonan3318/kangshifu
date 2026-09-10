@@ -14,7 +14,7 @@ from app.db import get_session
 from app.models import Department, DocumentAcl, DocumentVisibility, Role, User
 from app.models.document import DocumentStatus
 from app.schemas.documents import DocumentChunkResponse, DocumentContentResponse, DocumentDeleteRequest, DocumentExternalPolicyRequest, DocumentFilters, DocumentListResponse, DocumentResponse, DocumentUpdateRequest
-from app.services.audit import record as audit_record
+from app.services.audit import audit_action
 from app.services.documents import DocumentService
 from app.services.managed_storage import ManagedStorage
 
@@ -38,12 +38,15 @@ def upload_document(
     knowledge_base_id: Annotated[uuid.UUID | None, Form()] = None,
 ) -> DocumentResponse:
     """上传一个文件；内容重复时返回 409，而不会重复占用磁盘。"""
-    document = service.upload(file, knowledge_base_id)
-    audit_record(
+    with audit_action(
         service.session, "document_upload", user=getattr(request.state, "auth_user", None),
-        target_type="document", target_id=document.id,
-        detail={"name": document.original_name}, ip_address=request.client.host if request.client else None,
-    )
+        target_type="document",
+        ip_address=request.client.host if request.client else None,
+        request_id=request.headers.get("X-Request-ID"),
+    ) as audit:
+        document = service.upload(file, knowledge_base_id)
+        audit.id = document.id
+        audit.detail = {"name": document.original_name}
     return document_response(document, service)
 
 
@@ -86,27 +89,51 @@ def get_document(
 
 
 @router.patch("/{document_id}", response_model=DocumentResponse)
-def update_document(document_id: uuid.UUID, body: DocumentUpdateRequest, service: Annotated[DocumentService, Depends(get_document_service)]):
-    return document_response(service.update(document_id, body), service)
+def update_document(document_id: uuid.UUID, body: DocumentUpdateRequest, request: Request, service: Annotated[DocumentService, Depends(get_document_service)]):
+    with audit_action(
+        service.session, "document_updated", user=getattr(request.state, "auth_user", None),
+        target_type="document", target_id=document_id,
+        detail={"fields": sorted(body.model_fields_set)},
+        ip_address=request.client.host if request.client else None,
+        request_id=request.headers.get("X-Request-ID"),
+    ):
+        document = service.update(document_id, body)
+    return document_response(document, service)
 
 
 @router.post("/{document_id}/enable", response_model=DocumentResponse)
-def enable_document(document_id: uuid.UUID, service: Annotated[DocumentService, Depends(get_document_service)]):
-    return document_response(service.set_enabled(document_id, True), service)
+def enable_document(document_id: uuid.UUID, request: Request, service: Annotated[DocumentService, Depends(get_document_service)]):
+    with audit_action(
+        service.session, "document_enabled", user=getattr(request.state, "auth_user", None),
+        target_type="document", target_id=document_id,
+        ip_address=request.client.host if request.client else None,
+        request_id=request.headers.get("X-Request-ID"),
+    ):
+        document = service.set_enabled(document_id, True)
+    return document_response(document, service)
 
 
 @router.post("/{document_id}/disable", response_model=DocumentResponse)
-def disable_document(document_id: uuid.UUID, service: Annotated[DocumentService, Depends(get_document_service)]):
-    return document_response(service.set_enabled(document_id, False), service)
+def disable_document(document_id: uuid.UUID, request: Request, service: Annotated[DocumentService, Depends(get_document_service)]):
+    with audit_action(
+        service.session, "document_disabled", user=getattr(request.state, "auth_user", None),
+        target_type="document", target_id=document_id,
+        ip_address=request.client.host if request.client else None,
+        request_id=request.headers.get("X-Request-ID"),
+    ):
+        document = service.set_enabled(document_id, False)
+    return document_response(document, service)
 
 
 @router.post("/{document_id}/restore", response_model=DocumentResponse)
 def restore_document(document_id: uuid.UUID, request: Request, service: Annotated[DocumentService, Depends(get_document_service)]):
-    document = service.restore(document_id)
-    audit_record(
+    with audit_action(
         service.session, "document_restore", user=getattr(request.state, "auth_user", None),
-        target_type="document", target_id=document_id, ip_address=request.client.host if request.client else None,
-    )
+        target_type="document", target_id=document_id,
+        ip_address=request.client.host if request.client else None,
+        request_id=request.headers.get("X-Request-ID"),
+    ):
+        document = service.restore(document_id)
     return document_response(document, service)
 
 
@@ -138,14 +165,14 @@ def reprocess_document(
     confirm_overwrite: bool = False,
 ) -> DocumentResponse:
     """清除旧片段并重新排队解析，适用于修复 OCR/解析配置后重试。"""
-    document = service.reprocess(document_id, confirm_overwrite)
-    audit_record(
+    with audit_action(
         service.session, "document_reprocess", user=getattr(request.state, "auth_user", None),
         target_type="document", target_id=document_id,
         detail={"confirm_overwrite": confirm_overwrite},
         ip_address=request.client.host if request.client else None,
         request_id=request.headers.get("X-Request-ID"),
-    )
+    ):
+        document = service.reprocess(document_id, confirm_overwrite)
     return document_response(document, service)
 
 
@@ -156,14 +183,17 @@ def download_document(
     service: Annotated[DocumentService, Depends(get_document_service)],
 ) -> FileResponse:
     """从受管磁盘目录下载原始附件。"""
-    document = service.get(document_id)
-    audit_record(
+    with audit_action(
         service.session, "document_download", user=getattr(request.state, "auth_user", None),
-        target_type="document", target_id=document.id,
-        detail={"name": document.original_name}, ip_address=request.client.host if request.client else None,
-    )
+        target_type="document", target_id=document_id,
+        ip_address=request.client.host if request.client else None,
+        request_id=request.headers.get("X-Request-ID"),
+    ) as audit:
+        document = service.get(document_id)
+        audit.detail = {"name": document.original_name}
+        resolved = service.storage.resolve(document.stored_path)
     return FileResponse(
-        service.storage.resolve(document.stored_path),
+        resolved,
         media_type=document.mime_type,
         filename=document.original_name,
     )
@@ -177,12 +207,14 @@ def delete_document(
     body: DocumentDeleteRequest | None = None,
 ) -> Response:
     """将文档移入回收站；附件和索引继续保留以便恢复。"""
-    service.delete(document_id, body.reason if body else None)
-    audit_record(
+    with audit_action(
         service.session, "document_delete", user=getattr(request.state, "auth_user", None),
         target_type="document", target_id=document_id,
-        detail={"reason": body.reason if body else None}, ip_address=request.client.host if request.client else None,
-    )
+        detail={"reason": body.reason if body else None},
+        ip_address=request.client.host if request.client else None,
+        request_id=request.headers.get("X-Request-ID"),
+    ):
+        service.delete(document_id, body.reason if body else None)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -193,11 +225,13 @@ def purge_document(
     service: Annotated[DocumentService, Depends(get_document_service)],
 ) -> Response:
     """永久删除回收站中的文档及原始附件。"""
-    service.purge(document_id)
-    audit_record(
+    with audit_action(
         service.session, "document_purge", user=getattr(request.state, "auth_user", None),
-        target_type="document", target_id=document_id, ip_address=request.client.host if request.client else None,
-    )
+        target_type="document", target_id=document_id,
+        ip_address=request.client.host if request.client else None,
+        request_id=request.headers.get("X-Request-ID"),
+    ):
+        service.purge(document_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -222,8 +256,7 @@ def set_document_access(
     """设置文档可见级别与 ACL；仅上传人、管理员或 MANAGE 授权者可操作。"""
     visibility = DocumentVisibility(body.visibility) if body.visibility else None
     acl = [entry.model_dump() for entry in body.acl] if body.acl is not None else None
-    document = service.set_access(document_id, visibility=visibility, acl=acl)
-    audit_record(
+    with audit_action(
         service.session, "document_access_change", user=getattr(request.state, "auth_user", None),
         target_type="document", target_id=document_id,
         detail={
@@ -232,7 +265,8 @@ def set_document_access(
         },
         ip_address=request.client.host if request.client else None,
         request_id=request.headers.get("X-Request-ID"),
-    )
+    ):
+        document = service.set_access(document_id, visibility=visibility, acl=acl)
     return document_response(document, service)
 
 
@@ -244,10 +278,7 @@ def set_document_external_policy(
     service: Annotated[DocumentService, Depends(get_document_service)],
 ) -> DocumentResponse:
     """设置敏感级别与是否允许发送外部大模型；仅影响 DeepSeek，不影响本地千问。"""
-    document = service.set_external_policy(
-        document_id, body.sensitivity_level, body.external_llm_allowed,
-    )
-    audit_record(
+    with audit_action(
         service.session, "document_external_policy_change", user=getattr(request.state, "auth_user", None),
         target_type="document", target_id=document_id,
         detail={
@@ -256,7 +287,10 @@ def set_document_external_policy(
         },
         ip_address=request.client.host if request.client else None,
         request_id=request.headers.get("X-Request-ID"),
-    )
+    ):
+        document = service.set_external_policy(
+            document_id, body.sensitivity_level, body.external_llm_allowed,
+        )
     return document_response(document, service)
 
 

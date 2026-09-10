@@ -12,7 +12,7 @@ from app.schemas.identity import (
     ResetPasswordRequest, UserCreateRequest, UserListResponse, UserOut, UserUpdateRequest,
 )
 from app.services import identity
-from app.services.audit import record as audit_record
+from app.services.audit import audit_action, record as audit_record
 from app.services.permissions import require_admin
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -54,16 +54,16 @@ def create_user(
     session: Annotated[Session, Depends(get_session)],
 ) -> UserOut:
     admin = require_admin(current_user(request))
-    user = identity.create_user(
-        session, username=body.username, display_name=body.display_name, password=body.password,
-        department_id=body.department_id, role_ids=body.role_ids,
-        is_super_admin=body.is_super_admin, enabled=body.enabled,
-    )
-    audit_record(
-        session, "user_created", user=admin, target_type="user", target_id=user.id,
-        detail={"username": user.username, "is_super_admin": user.is_super_admin},
-        **_request_meta(request),
-    )
+    with audit_action(
+        session, "user_created", user=admin, target_type="user", **_request_meta(request),
+    ) as audit:
+        user = identity.create_user(
+            session, username=body.username, display_name=body.display_name, password=body.password,
+            department_id=body.department_id, role_ids=body.role_ids,
+            is_super_admin=body.is_super_admin, enabled=body.enabled,
+        )
+        audit.id = user.id
+        audit.detail = {"username": user.username, "is_super_admin": user.is_super_admin}
     return UserOut(**identity.user_payload(user))
 
 
@@ -85,17 +85,17 @@ def update_user(
     session: Annotated[Session, Depends(get_session)],
 ) -> UserOut:
     admin = require_admin(current_user(request))
-    user = identity.update_user(
-        session, user_id, current=admin,
-        display_name=body.display_name,
-        department_id=body.department_id,
-        department_set="department_id" in body.model_fields_set,
-        role_ids=body.role_ids, is_super_admin=body.is_super_admin, enabled=body.enabled,
-    )
-    audit_record(
-        session, "user_updated", user=admin, target_type="user", target_id=user.id,
+    with audit_action(
+        session, "user_updated", user=admin, target_type="user", target_id=user_id,
         detail={"fields": sorted(body.model_fields_set)}, **_request_meta(request),
-    )
+    ):
+        user = identity.update_user(
+            session, user_id, current=admin,
+            display_name=body.display_name,
+            department_id=body.department_id,
+            department_set="department_id" in body.model_fields_set,
+            role_ids=body.role_ids, is_super_admin=body.is_super_admin, enabled=body.enabled,
+        )
     if body.role_ids is not None:
         audit_record(
             session, "role_assignment_changed", user=admin, target_type="user", target_id=user.id,
@@ -111,11 +111,11 @@ def enable_user(
     session: Annotated[Session, Depends(get_session)],
 ) -> UserOut:
     admin = require_admin(current_user(request))
-    user = identity.set_enabled(session, user_id, True, admin)
-    audit_record(
-        session, "user_enabled", user=admin, target_type="user", target_id=user.id,
-        detail={"username": user.username}, **_request_meta(request),
-    )
+    with audit_action(
+        session, "user_enabled", user=admin, target_type="user", target_id=user_id,
+        **_request_meta(request),
+    ):
+        user = identity.set_enabled(session, user_id, True, admin)
     return UserOut(**identity.user_payload(user))
 
 
@@ -126,11 +126,11 @@ def disable_user(
     session: Annotated[Session, Depends(get_session)],
 ) -> UserOut:
     admin = require_admin(current_user(request))
-    user = identity.set_enabled(session, user_id, False, admin)
-    audit_record(
-        session, "user_disabled", user=admin, target_type="user", target_id=user.id,
-        detail={"username": user.username}, **_request_meta(request),
-    )
+    with audit_action(
+        session, "user_disabled", user=admin, target_type="user", target_id=user_id,
+        **_request_meta(request),
+    ):
+        user = identity.set_enabled(session, user_id, False, admin)
     return UserOut(**identity.user_payload(user))
 
 
@@ -142,9 +142,10 @@ def reset_password(
     session: Annotated[Session, Depends(get_session)],
 ) -> dict:
     admin = require_admin(current_user(request))
-    user = identity.reset_password(session, user_id, body.new_password)
-    audit_record(
-        session, "password_reset", user=admin, target_type="user", target_id=user.id,
-        detail={"username": user.username}, **_request_meta(request),
-    )
+    with audit_action(
+        session, "password_reset", user=admin, target_type="user", target_id=user_id,
+        **_request_meta(request),
+    ) as audit:
+        user = identity.reset_password(session, user_id, body.new_password)
+        audit.detail = {"username": user.username}
     return {"ok": True, "sessions_revoked": True}

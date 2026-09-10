@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
+import hashlib
 from time import perf_counter
 import uuid
 
@@ -9,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.models import Document, DocumentAcl, DocumentChunk, KnowledgeBase, Tag
+from app.models import Department, Document, DocumentAcl, DocumentChunk, KnowledgeBase, Tag
 from app.schemas.search import RetrievalStageItem, SearchDiagnostics, SearchRequest, SearchResult
 from app.services.embeddings import EmbeddingService
 from app.services.feedback_ranking import FeedbackRankingService
@@ -53,18 +54,43 @@ class SearchService:
         self.resolver = PermissionResolver(session, user) if user is not None else None
 
     def permission_cache_scope(self) -> str:
-        """Build a per-user cache partition that changes with ACL membership."""
+        """构建随权限状态变化的缓存分区。
+
+        指纹覆盖：启用中的角色及其 updated_at、启用部门链及其 updated_at、
+        用户自身 updated_at，以及全部文档 ACL 条目的内容哈希。
+        与 RAG 层的资料版本指纹叠加后，角色增删/启停、部门变更/启停、
+        ACL 增删或权限级别变化、文档可见范围变化都会让旧缓存失效。
+        """
         if self.user is None:
             return "unauthenticated"
-        roles = "-".join(sorted(str(role.id) for role in self.user.roles))
+        enabled_roles = sorted(
+            (str(role.id), role.updated_at.isoformat() if role.updated_at else "")
+            for role in self.user.roles if role.enabled
+        )
+        roles = ";".join(f"{role_id}@{stamp}" for role_id, stamp in enabled_roles)
         department_ids = self.resolver.department_ids if self.resolver else []
-        departments = "-".join(sorted(str(item) for item in department_ids))
-        acl_count, acl_latest = self.session.execute(
-            select(func.count(DocumentAcl.id), func.max(DocumentAcl.created_at))
-        ).one()
+        department_stamps: list[str] = []
+        for department_id in sorted(department_ids, key=str):
+            row = self.session.get(Department, department_id)
+            stamp = row.updated_at.isoformat() if row is not None and row.updated_at else ""
+            department_stamps.append(f"{department_id}@{stamp}")
+        departments = ";".join(department_stamps)
+        acl_rows = self.session.execute(
+            select(
+                DocumentAcl.document_id, DocumentAcl.subject_type,
+                DocumentAcl.subject_id, DocumentAcl.permission,
+            ).order_by(DocumentAcl.document_id, DocumentAcl.subject_type, DocumentAcl.subject_id)
+        ).all()
+        acl_digest = hashlib.sha256("|".join(
+            f"{document_id}:{getattr(subject_type, 'value', subject_type)}:"
+            f"{subject_id}:{getattr(permission, 'value', permission)}"
+            for document_id, subject_type, subject_id, permission in acl_rows
+        ).encode("utf-8")).hexdigest()[:16]
+        user_stamp = self.user.updated_at.isoformat() if self.user.updated_at else ""
         return (
-            f"user:{self.user.id}|admin:{int(self.user.is_super_admin)}|"
-            f"departments:{departments}|roles:{roles}|acl:{acl_count}:{acl_latest or ''}"
+            f"user:{self.user.id}@{user_stamp}|admin:{int(self.user.is_super_admin)}|"
+            f"department:{self.user.department_id or ''}|departments:{departments}|"
+            f"roles:{roles}|acl:{len(acl_rows)}:{acl_digest}"
         )
 
     def search(self, request: SearchRequest) -> list[SearchResult]:

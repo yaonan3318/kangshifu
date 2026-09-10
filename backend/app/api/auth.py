@@ -50,18 +50,24 @@ async def login(
     limiter.window = settings.auth_login_rate_window_seconds
     ip = request.client.host if request.client else None
     request_id = request.headers.get("X-Request-ID")
-    limiter.check(ip)
+    from app.services.audit import record
+
+    try:
+        limiter.check(ip)
+    except AppError as exc:
+        record(
+            session, "login_rate_limited", detail={"username": body.username.strip()},
+            ip_address=ip, success=False, error_code=exc.code, request_id=request_id,
+        )
+        raise
     try:
         user = authenticate(session, body.username, body.password)
     except AppError as exc:
-        from app.services.audit import record
-
         record(
             session, "login_failed", detail={"username": body.username.strip()},
             ip_address=ip, success=False, error_code=exc.code, request_id=request_id,
         )
         raise
-    from app.services.audit import record
 
     token = create_session_token(session, user, ip, days=settings.auth_session_days)
     record(
@@ -83,6 +89,11 @@ async def logout(
 ):
     token = request.cookies.get(COOKIE)
     user = getattr(request.state, "auth_user", None)
+    # logout 属于公开端点，中间件可能未解析用户；撤销前按 Cookie 反查退出用户。
+    if user is None and token:
+        auth_session = find_by_token(session, token)
+        if auth_session is not None:
+            user = session.get(User, auth_session.user_id)
     revoke_session(session, token or "")
     from app.services.audit import record
 

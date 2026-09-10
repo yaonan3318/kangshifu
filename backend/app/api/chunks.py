@@ -10,7 +10,7 @@ from app.api.auth import current_user
 from app.config import Settings, get_settings
 from app.db import get_session
 from app.schemas.chunks import ChunkListResponse, ChunkResponse, ChunkUpdateRequest
-from app.services.audit import record as audit_record
+from app.services.audit import audit_action
 from app.services.chunks import ChunkService
 
 
@@ -40,54 +40,54 @@ def list_chunks(document_id: uuid.UUID, service: Annotated[ChunkService, Depends
 
 @router.patch("/chunks/{chunk_id}", response_model=ChunkResponse)
 def update_chunk(chunk_id: uuid.UUID, body: ChunkUpdateRequest, request: Request, service: Annotated[ChunkService, Depends(get_service)]):
-    chunk = service.update_content(chunk_id, body.content)
-    audit_record(
+    with audit_action(
         service.session, "chunk_updated", user=current_user(request),
-        target_type="document_chunk", target_id=chunk.id,
-        detail={"document_id": str(chunk.document_id)}, **_meta(request),
-    )
+        target_type="document_chunk", target_id=chunk_id, **_meta(request),
+    ) as audit:
+        chunk = service.update_content(chunk_id, body.content)
+        audit.detail = {"document_id": str(chunk.document_id)}
     return ChunkResponse.model_validate(chunk)
 
 
 @router.post("/chunks/{chunk_id}/enable", response_model=ChunkResponse)
 def enable_chunk(chunk_id: uuid.UUID, request: Request, service: Annotated[ChunkService, Depends(get_service)]):
-    chunk = service.set_enabled(chunk_id, True)
-    audit_record(
+    with audit_action(
         service.session, "chunk_updated", user=current_user(request),
-        target_type="document_chunk", target_id=chunk.id,
-        detail={"document_id": str(chunk.document_id), "enabled": True}, **_meta(request),
-    )
+        target_type="document_chunk", target_id=chunk_id, **_meta(request),
+    ) as audit:
+        chunk = service.set_enabled(chunk_id, True)
+        audit.detail = {"document_id": str(chunk.document_id), "enabled": True}
     return ChunkResponse.model_validate(chunk)
 
 
 @router.post("/chunks/{chunk_id}/disable", response_model=ChunkResponse)
 def disable_chunk(chunk_id: uuid.UUID, request: Request, service: Annotated[ChunkService, Depends(get_service)]):
-    chunk = service.set_enabled(chunk_id, False)
-    audit_record(
+    with audit_action(
         service.session, "chunk_updated", user=current_user(request),
-        target_type="document_chunk", target_id=chunk.id,
-        detail={"document_id": str(chunk.document_id), "enabled": False}, **_meta(request),
-    )
+        target_type="document_chunk", target_id=chunk_id, **_meta(request),
+    ) as audit:
+        chunk = service.set_enabled(chunk_id, False)
+        audit.detail = {"document_id": str(chunk.document_id), "enabled": False}
     return ChunkResponse.model_validate(chunk)
 
 
 @router.post("/chunks/{chunk_id}/reindex", response_model=ChunkResponse)
 def reindex_chunk(chunk_id: uuid.UUID, request: Request, service: Annotated[ChunkService, Depends(get_service)]):
-    chunk = service.reindex(chunk_id)
-    audit_record(
+    with audit_action(
         service.session, "chunk_updated", user=current_user(request),
-        target_type="document_chunk", target_id=chunk.id,
-        detail={"document_id": str(chunk.document_id), "reindexed": True}, **_meta(request),
-    )
+        target_type="document_chunk", target_id=chunk_id, **_meta(request),
+    ) as audit:
+        chunk = service.reindex(chunk_id)
+        audit.detail = {"document_id": str(chunk.document_id), "reindexed": True}
     return ChunkResponse.model_validate(chunk)
 
 
 @router.post("/chunks/{chunk_id}/restore-original", response_model=ChunkResponse)
 def restore_chunk(chunk_id: uuid.UUID, request: Request, service: Annotated[ChunkService, Depends(get_service)]):
-    chunk = service.restore_original(chunk_id)
-    audit_record(
+    with audit_action(
         service.session, "chunk_updated", user=current_user(request),
-        target_type="document_chunk", target_id=chunk.id,
-        detail={"document_id": str(chunk.document_id), "restored": True}, **_meta(request),
-    )
+        target_type="document_chunk", target_id=chunk_id, **_meta(request),
+    ) as audit:
+        chunk = service.restore_original(chunk_id)
+        audit.detail = {"document_id": str(chunk.document_id), "restored": True}
     return ChunkResponse.model_validate(chunk)

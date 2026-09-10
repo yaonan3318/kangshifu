@@ -6,17 +6,17 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_session
 from app.errors import AppError
 from app.models import (
-    AnswerFeedback, Assistant, ChatMessage, ChatMessageRole, ChatMessageSource,
-    ChatMessageStatus, ChatProvider, FeedbackRating,
+    AnswerFeedback, AnswerFeedbackDocument, Assistant, ChatMessage, ChatMessageRole,
+    ChatMessageSource, ChatMessageStatus, ChatProvider, FeedbackRating,
 )
 from app.models.chat import ChatSession
-from app.services.audit import record as audit_record
+from app.services.audit import audit_action
 from app.services.feedback_ranking import FeedbackRankingService
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
@@ -163,7 +163,14 @@ def _feedbacks(
     if created_to is not None:
         filters.append(AnswerFeedback.created_at <= created_to)
     if document_id is not None:
-        filters.append(AnswerFeedback.document_id == document_id)
+        filters.append(or_(
+            AnswerFeedback.document_id == document_id,
+            AnswerFeedback.id.in_(
+                select(AnswerFeedbackDocument.feedback_id).where(
+                    AnswerFeedbackDocument.document_id == document_id
+                )
+            ),
+        ))
     if reason:
         filters.append(AnswerFeedback.reasons.contains([reason]))
     if no_answer is not None:
@@ -216,15 +223,24 @@ def create_feedback(
     message = _find_message(session, body.message_id)
     if not _own_session_user(session, message, user):
         raise AppError("FEEDBACK_FORBIDDEN", "不能评价他人的回答", 403)
-    source_document_ids = list(session.scalars(
-        select(ChatMessageSource.document_id).where(ChatMessageSource.message_id == body.message_id).distinct()
-    ).all())
+    source_documents = session.execute(
+        select(ChatMessageSource.document_id, func.min(ChatMessageSource.citation_number))
+        .where(ChatMessageSource.message_id == body.message_id)
+        .group_by(ChatMessageSource.document_id)
+    ).all()
+    source_document_ids = [document_id for document_id, _ in source_documents]
+    # 兼容旧的单文档字段：只有恰好一个引用文档时才回填。
     document_id = source_document_ids[0] if len(source_document_ids) == 1 else None
     existing = session.scalar(select(AnswerFeedback).where(
         AnswerFeedback.message_id == body.message_id, AnswerFeedback.user_id == user.id,
     ))
     rating = FeedbackRating(body.rating)
     if existing:
+        previous_documents = set(session.scalars(
+            select(AnswerFeedbackDocument.document_id).where(
+                AnswerFeedbackDocument.feedback_id == existing.id
+            )
+        ).all())
         existing.rating = rating
         existing.reasons = list(body.reasons)
         existing.comment = body.comment
@@ -232,15 +248,28 @@ def create_feedback(
         existing.resolved_at = None
         existing.resolution_note = None
         feedback = existing
+        session.flush()
+        session.execute(
+            delete(AnswerFeedbackDocument).where(AnswerFeedbackDocument.feedback_id == feedback.id)
+        )
     else:
         feedback = AnswerFeedback(
             message_id=body.message_id, user_id=user.id, rating=rating,
             reasons=list(body.reasons), comment=body.comment, document_id=document_id,
         )
         session.add(feedback)
+        session.flush()
+        previous_documents = set()
+    for source_document_id, citation_number in source_documents:
+        session.add(AnswerFeedbackDocument(
+            feedback_id=feedback.id, document_id=source_document_id,
+            citation_number=citation_number,
+        ))
     session.commit()
-    if document_id is not None:
-        FeedbackRankingService(session, request.app.state.settings).recompute(document_id)
+    # 评分可能变化，需重算所有曾关联文档，避免旧统计残留。
+    service = FeedbackRankingService(session, request.app.state.settings)
+    for affected_id in previous_documents | set(source_document_ids):
+        service.recompute(affected_id)
     return {"ok": True}
 
 
@@ -317,12 +346,14 @@ def resolve_feedback(
     user = getattr(request.state, "auth_user", None)
     if user is None or not user.is_super_admin:
         raise AppError("ADMIN_REQUIRED", "需要管理员权限", 403)
-    feedback = session.get(AnswerFeedback, feedback_id)
-    if feedback is None:
-        raise AppError("FEEDBACK_NOT_FOUND", "反馈不存在", 404)
-    feedback.resolved_at = datetime.now(UTC)
-    feedback.resolved_by = user.id
-    feedback.resolution_note = body.note
-    session.commit()
-    audit_record(session, "feedback_resolved", user=user, target_type="feedback", target_id=feedback.id)
+    with audit_action(
+        session, "feedback_resolved", user=user, target_type="feedback", target_id=feedback_id,
+    ):
+        feedback = session.get(AnswerFeedback, feedback_id)
+        if feedback is None:
+            raise AppError("FEEDBACK_NOT_FOUND", "反馈不存在", 404)
+        feedback.resolved_at = datetime.now(UTC)
+        feedback.resolved_by = user.id
+        feedback.resolution_note = body.note
+        session.commit()
     return {"ok": True}

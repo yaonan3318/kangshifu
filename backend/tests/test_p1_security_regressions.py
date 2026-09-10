@@ -121,6 +121,7 @@ class P1SecurityRegressionTests(unittest.TestCase):
             ("0013_identity_management.py", "0013_identity_management", "0012_answer_feedback"),
             ("0014_audit_completion.py", "0014_audit_completion", "0013_identity_management"),
             ("0015_feedback_ranking.py", "0015_feedback_ranking", "0014_audit_completion"),
+            ("0016_feedback_documents.py", "0016_feedback_documents", "0015_feedback_ranking"),
         ):
             content = (versions / filename).read_text(encoding="utf-8")
             self.assertIn(f'revision = "{revision}"', content)

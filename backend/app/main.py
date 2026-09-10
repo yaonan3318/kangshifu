@@ -83,7 +83,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def auth_gate(request: Request, call_next):
-        """统一登录鉴权：除登录/健康等公开端点外，/api/* 都必须携带有效会话 Cookie。"""
+        """统一登录鉴权：除登录/健康等公开端点外，/api/* 都必须携带有效会话 Cookie。
+
+        公开端点（如 logout）不强制登录，但只要携带了 Cookie 就尝试解析用户并写入
+        ``request.state.auth_user``，让退出审计能记录实际退出用户。
+        """
         path = request.url.path
         public = (
             request.method == "OPTIONS"
@@ -91,26 +95,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             or path.startswith(("/docs", "/redoc", "/openapi.json"))
             or not path.startswith("/api")
         )
-        if not public:
-            token = request.cookies.get(COOKIE)
-            user = None
-            if token:
-                try:
-                    with SessionLocal() as session:
-                        auth_session = find_by_token(session, token)
-                        if auth_session is not None:
-                            user = session.scalar(
-                                select(User).where(User.id == auth_session.user_id)
-                                .options(selectinload(User.roles), selectinload(User.department))
-                            )
-                except Exception:
-                    user = None
-            if user is None or not user.enabled:
-                return JSONResponse(
-                    status_code=401,
-                    content={"error": {"code": "AUTH_REQUIRED", "message": "请先登录", "details": None}},
-                )
+        token = request.cookies.get(COOKIE)
+        user = None
+        if token and path.startswith("/api"):
+            try:
+                with SessionLocal() as session:
+                    auth_session = find_by_token(session, token)
+                    if auth_session is not None:
+                        user = session.scalar(
+                            select(User).where(User.id == auth_session.user_id)
+                            .options(selectinload(User.roles), selectinload(User.department))
+                        )
+            except Exception:
+                user = None
+        if user is not None and user.enabled:
             request.state.auth_user = user
+        if not public and (user is None or not user.enabled):
+            return JSONResponse(
+                status_code=401,
+                content={"error": {"code": "AUTH_REQUIRED", "message": "请先登录", "details": None}},
+            )
         return await call_next(request)
 
     @app.exception_handler(AppError)

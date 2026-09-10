@@ -14,7 +14,7 @@ from app.schemas.assistant import (
     AssistantKnowledgeBasesPut, AssistantListResponse, AssistantOut, AssistantUpsert,
 )
 from app.api.auth import current_user
-from app.services.audit import record as audit_record
+from app.services.audit import audit_action
 from app.services.permissions import require_admin
 
 router = APIRouter(prefix="/api/assistants", tags=["assistants"])
@@ -85,32 +85,33 @@ def create_assistant(
     session: Annotated[Session, Depends(get_session)],
 ) -> AssistantOut:
     """新建助手；未提供名称时用默认名称。"""
-    require_admin(current_user(request))
+    admin = require_admin(current_user(request))
     name = (body.name or "").strip() or "未命名助手"
-    if session.scalar(select(Assistant).where(Assistant.name == name)) is not None:
-        raise AppError("ASSISTANT_NAME_EXISTS", "已存在同名助手", 409)
-    assistant = Assistant(
-        name=name,
-        description=body.description,
-        avatar=body.avatar or "康",
-        welcome_message=body.welcome_message,
-        system_prompt=body.system_prompt,
-        model_provider=body.model_provider or "ollama",
-        model_name=body.model_name or None,
-        use_deepseek_allowed=True if body.use_deepseek_allowed is None else body.use_deepseek_allowed,
-        default_deepseek_enabled=False if body.default_deepseek_enabled is None else body.default_deepseek_enabled,
-        retrieval_limit=body.retrieval_limit or 6,
-        temperature=0.2 if body.temperature is None else body.temperature,
-        recommended_questions=[str(q) for q in (body.recommended_questions or [])],
-        enabled=True if body.enabled is None else body.enabled,
-    )
-    session.add(assistant)
-    session.commit()
-    session.refresh(assistant)
-    audit_record(
-        session, "assistant_created", user=current_user(request),
-        target_type="assistant", target_id=assistant.id, detail={"name": assistant.name}, **_meta(request),
-    )
+    with audit_action(
+        session, "assistant_created", user=admin, target_type="assistant", **_meta(request),
+    ) as audit:
+        if session.scalar(select(Assistant).where(Assistant.name == name)) is not None:
+            raise AppError("ASSISTANT_NAME_EXISTS", "已存在同名助手", 409)
+        assistant = Assistant(
+            name=name,
+            description=body.description,
+            avatar=body.avatar or "康",
+            welcome_message=body.welcome_message,
+            system_prompt=body.system_prompt,
+            model_provider=body.model_provider or "ollama",
+            model_name=body.model_name or None,
+            use_deepseek_allowed=True if body.use_deepseek_allowed is None else body.use_deepseek_allowed,
+            default_deepseek_enabled=False if body.default_deepseek_enabled is None else body.default_deepseek_enabled,
+            retrieval_limit=body.retrieval_limit or 6,
+            temperature=0.2 if body.temperature is None else body.temperature,
+            recommended_questions=[str(q) for q in (body.recommended_questions or [])],
+            enabled=True if body.enabled is None else body.enabled,
+        )
+        session.add(assistant)
+        session.commit()
+        session.refresh(assistant)
+        audit.id = assistant.id
+        audit.detail = {"name": assistant.name}
     return _load(session, assistant.id)
 
 
@@ -131,11 +132,11 @@ def update_assistant(
 ) -> AssistantOut:
     """更新助手字段；仅更新显式提供的字段。"""
     admin = require_admin(current_user(request))
-    payload = _assistant_payload(_apply(session, _load(session, assistant_id), body))
-    audit_record(
+    with audit_action(
         session, "assistant_updated", user=admin, target_type="assistant", target_id=assistant_id,
         detail={"fields": sorted(body.model_dump(exclude_unset=True).keys())}, **_meta(request),
-    )
+    ):
+        payload = _assistant_payload(_apply(session, _load(session, assistant_id), body))
     return payload
 
 
@@ -146,13 +147,13 @@ def enable_assistant(
     session: Annotated[Session, Depends(get_session)],
 ) -> AssistantOut:
     admin = require_admin(current_user(request))
-    assistant = _load(session, assistant_id)
-    assistant.enabled = True
-    session.commit()
-    audit_record(
+    with audit_action(
         session, "assistant_enabled", user=admin, target_type="assistant", target_id=assistant_id,
-        detail={"name": assistant.name}, **_meta(request),
-    )
+        **_meta(request),
+    ):
+        assistant = _load(session, assistant_id)
+        assistant.enabled = True
+        session.commit()
     return _assistant_payload(_load(session, assistant_id))
 
 
@@ -163,13 +164,13 @@ def disable_assistant(
     session: Annotated[Session, Depends(get_session)],
 ) -> AssistantOut:
     admin = require_admin(current_user(request))
-    assistant = _load(session, assistant_id)
-    assistant.enabled = False
-    session.commit()
-    audit_record(
+    with audit_action(
         session, "assistant_disabled", user=admin, target_type="assistant", target_id=assistant_id,
-        detail={"name": assistant.name}, **_meta(request),
-    )
+        **_meta(request),
+    ):
+        assistant = _load(session, assistant_id)
+        assistant.enabled = False
+        session.commit()
     return _assistant_payload(_load(session, assistant_id))
 
 
@@ -182,30 +183,27 @@ def set_assistant_knowledge_bases(
 ) -> AssistantOut:
     """设置助手使用的知识库；传入空数组表示“全部启用知识库”。"""
     admin = require_admin(current_user(request))
-    assistant = _load(session, assistant_id)
     ids = list(dict.fromkeys(body.knowledge_base_ids))
-    if ids:
-        existing = set(session.scalars(select(KnowledgeBase.id).where(KnowledgeBase.id.in_(ids))).all())
-        missing = [item for item in ids if item not in existing]
-        if missing:
-            raise AppError("KNOWLEDGE_BASE_NOT_FOUND", "指定的知识库不存在", 404, {"ids": [str(item) for item in missing]})
-        session.execute(
-            assistant_knowledge_bases.delete().where(assistant_knowledge_bases.c.assistant_id == assistant_id)
-        )
-        session.execute(
-            assistant_knowledge_bases.insert(),
-            [{"assistant_id": assistant_id, "knowledge_base_id": item} for item in ids],
-        )
-    else:
-        session.execute(
-            assistant_knowledge_bases.delete().where(assistant_knowledge_bases.c.assistant_id == assistant_id)
-        )
-    session.commit()
-    audit_record(
+    with audit_action(
         session, "assistant_knowledge_bases_changed", user=admin,
         target_type="assistant", target_id=assistant_id,
         detail={"knowledge_base_ids": [str(item) for item in ids]}, **_meta(request),
-    )
+    ):
+        _load(session, assistant_id)
+        if ids:
+            existing = set(session.scalars(select(KnowledgeBase.id).where(KnowledgeBase.id.in_(ids))).all())
+            missing = [item for item in ids if item not in existing]
+            if missing:
+                raise AppError("KNOWLEDGE_BASE_NOT_FOUND", "指定的知识库不存在", 404, {"ids": [str(item) for item in missing]})
+        session.execute(
+            assistant_knowledge_bases.delete().where(assistant_knowledge_bases.c.assistant_id == assistant_id)
+        )
+        if ids:
+            session.execute(
+                assistant_knowledge_bases.insert(),
+                [{"assistant_id": assistant_id, "knowledge_base_id": item} for item in ids],
+            )
+        session.commit()
     return _assistant_payload(_load(session, assistant_id))
 
 
@@ -217,14 +215,14 @@ def delete_assistant(
 ) -> dict:
     """删除助手；默认助手不可删除。"""
     admin = require_admin(current_user(request))
-    if assistant_id == DEFAULT_ASSISTANT_ID:
-        raise AppError("DEFAULT_ASSISTANT_PROTECTED", "默认助手不可删除", 400)
-    assistant = _load(session, assistant_id)
-    name = assistant.name
-    session.delete(assistant)
-    session.commit()
-    audit_record(
+    with audit_action(
         session, "assistant_deleted", user=admin, target_type="assistant", target_id=assistant_id,
-        detail={"name": name}, **_meta(request),
-    )
+        **_meta(request),
+    ) as audit:
+        if assistant_id == DEFAULT_ASSISTANT_ID:
+            raise AppError("DEFAULT_ASSISTANT_PROTECTED", "默认助手不可删除", 400)
+        assistant = _load(session, assistant_id)
+        audit.detail = {"name": assistant.name}
+        session.delete(assistant)
+        session.commit()
     return {"deleted": True}

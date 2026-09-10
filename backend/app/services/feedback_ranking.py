@@ -13,7 +13,9 @@ from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.models import AnswerFeedback, DocumentFeedbackStats, FeedbackRating
+from app.models import (
+    AnswerFeedback, AnswerFeedbackDocument, DocumentFeedbackStats, FeedbackRating,
+)
 
 
 class FeedbackRankingService:
@@ -49,16 +51,20 @@ class FeedbackRankingService:
         return boosts
 
     def recompute(self, document_id: uuid.UUID | None = None) -> None:
-        """根据反馈重新聚合文档统计；供反馈写入后调用。"""
+        """根据反馈关联表重新聚合文档统计；供反馈写入后调用。
+
+        通过 ``answer_feedback_documents`` 统计，一次反馈引用多个文档时每个文档都计入；
+        唯一约束保证同一回答同一文档只统计一次。
+        """
         up = func.count(case((AnswerFeedback.rating == FeedbackRating.UP, 1)))
         down = func.count(case((AnswerFeedback.rating == FeedbackRating.DOWN, 1)))
         statement = (
-            select(AnswerFeedback.document_id, func.count(AnswerFeedback.id), up, down)
-            .where(AnswerFeedback.document_id.is_not(None))
-            .group_by(AnswerFeedback.document_id)
+            select(AnswerFeedbackDocument.document_id, func.count(AnswerFeedbackDocument.id), up, down)
+            .join(AnswerFeedback, AnswerFeedback.id == AnswerFeedbackDocument.feedback_id)
+            .group_by(AnswerFeedbackDocument.document_id)
         )
         if document_id is not None:
-            statement = statement.where(AnswerFeedback.document_id == document_id)
+            statement = statement.where(AnswerFeedbackDocument.document_id == document_id)
         rows = self.session.execute(statement).all()
         seen: set[uuid.UUID] = set()
         for doc_id, sample_count, up_count, down_count in rows:

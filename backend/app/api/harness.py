@@ -13,7 +13,7 @@ from app.config import Settings, get_settings
 from app.db import get_session
 from app.harness.kubernetes import KubectlClient
 from app.schemas.harness import ApprovalConfirmRequest, ApprovalRejectRequest, HarnessApprovalResponse, HarnessStatusResponse, HarnessTaskResponse
-from app.services.audit import record as audit_record
+from app.services.audit import audit_action
 from app.services.harness import HarnessService
 from app.services.harness_approvals import ApprovalService
 from app.services.permissions import require_admin
@@ -52,30 +52,32 @@ def task(task_id: uuid.UUID, request: Request, session: Annotated[Session, Depen
 def resume(task_id: uuid.UUID, request: Request, session: Annotated[Session, Depends(get_session)], settings: Annotated[Settings, Depends(get_settings)], use_deepseek: bool = False) -> StreamingResponse:
     admin = require_admin(current_user(request))
     service = HarnessService(session, settings, user=admin)
-    audit_record(
+    with audit_action(
         session, "harness_started", user=admin, target_type="harness_task", target_id=task_id,
         detail={"use_deepseek": use_deepseek}, **_meta(request),
-    )
-    return StreamingResponse((encode_sse(event) async for event in service.resume(task_id, use_deepseek)), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    ):
+        stream = service.resume(task_id, use_deepseek)
+    return StreamingResponse((encode_sse(event) async for event in stream), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @router.post("/approvals/{approval_id}/confirm", response_model=HarnessApprovalResponse)
 async def confirm(approval_id: uuid.UUID, body: ApprovalConfirmRequest, request: Request, session: Annotated[Session, Depends(get_session)], settings: Annotated[Settings, Depends(get_settings)]) -> HarnessApprovalResponse:
     admin = require_admin(current_user(request))
-    result = HarnessApprovalResponse.model_validate(await ApprovalService(session, settings).confirm(approval_id, body.confirmation_context))
-    audit_record(
+    with audit_action(
         session, "harness_approval_confirmed", user=admin, target_type="harness_approval",
-        target_id=approval_id, detail={"status": result.status}, **_meta(request),
-    )
+        target_id=approval_id, **_meta(request),
+    ) as audit:
+        result = HarnessApprovalResponse.model_validate(await ApprovalService(session, settings).confirm(approval_id, body.confirmation_context))
+        audit.detail = {"status": result.status}
     return result
 
 
 @router.post("/approvals/{approval_id}/reject", response_model=HarnessApprovalResponse)
 def reject(approval_id: uuid.UUID, body: ApprovalRejectRequest, request: Request, session: Annotated[Session, Depends(get_session)], settings: Annotated[Settings, Depends(get_settings)]) -> HarnessApprovalResponse:
     admin = require_admin(current_user(request))
-    result = HarnessApprovalResponse.model_validate(ApprovalService(session, settings).reject(approval_id, body.reason))
-    audit_record(
+    with audit_action(
         session, "harness_approval_rejected", user=admin, target_type="harness_approval",
         target_id=approval_id, detail={"reason": body.reason}, **_meta(request),
-    )
+    ):
+        result = HarnessApprovalResponse.model_validate(ApprovalService(session, settings).reject(approval_id, body.reason))
     return result

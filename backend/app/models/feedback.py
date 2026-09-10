@@ -4,7 +4,9 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, String, Text, func, text
+from sqlalchemy import (
+    DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func, text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -35,6 +37,23 @@ class AnswerFeedback(Base):
     resolution_note: Mapped[str | None] = mapped_column(Text)
 
     message = relationship("ChatMessage", foreign_keys=[message_id])
+
+
+class AnswerFeedbackDocument(Base):
+    """一次反馈关联的引用文档；同一回答同一文档只保留一条，供排序统计使用。"""
+    __tablename__ = "answer_feedback_documents"
+    __table_args__ = (
+        UniqueConstraint("feedback_id", "document_id", name="uq_answer_feedback_documents"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    feedback_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("answer_feedback.id", ondelete="CASCADE"), index=True
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    citation_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class DocumentFeedbackStats(Base):

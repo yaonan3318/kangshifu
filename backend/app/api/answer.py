@@ -173,10 +173,17 @@ async def answer_stream(
                     recorder.complete(content, ChatProvider.HARNESS, "INTERNAL", sources, metrics=metrics_payload)
                     finalized = True
                 elif event.type == "error" and event.error:
+                    error_code = event.error.get("code", "ANSWER_FAILED")
                     recorder.mark_failed(
-                        "".join(text_parts),
-                        event.error.get("code", "ANSWER_FAILED"),
+                        "".join(text_parts), error_code,
                         event.error.get("message", "问答处理失败"),
+                    )
+                    audit_record(
+                        session, "answer_failed", user=chat_user,
+                        target_type="chat_session", target_id=prepared.id,
+                        detail={"error_code": error_code},
+                        ip_address=ip_address, success=False, error_code=error_code,
+                        request_id=request_id,
                     )
                     finalized = True
                 yield encode_sse(event)

@@ -77,6 +77,10 @@ def _find(service: ChatService, session_id: uuid.UUID, include_archived: bool = 
         raise AppError("CHAT_SESSION_NOT_FOUND", "会话不存在", 404) from exc
 
 
+def _not_found() -> AppError:
+    return AppError("CHAT_SESSION_NOT_FOUND", "会话不存在", 404)
+
+
 @router.get("/sessions", response_model=ChatSessionListResponse)
 def list_sessions(
     service: Annotated[ChatService, Depends(get_chat_service)],
@@ -132,7 +136,11 @@ def archive_session(
     service: Annotated[ChatService, Depends(get_chat_service)],
 ) -> ChatSessionListItem:
     """归档会话，保留数据但从默认列表隐藏。"""
-    return _list_item_payload(service.archive(session_id), service)
+    try:
+        row = service.archive(session_id)
+    except KeyError as exc:
+        raise _not_found() from exc
+    return _list_item_payload(row, service)
 
 
 @router.post("/sessions/{session_id}/restore", response_model=ChatSessionListItem)
@@ -141,7 +149,11 @@ def restore_session(
     service: Annotated[ChatService, Depends(get_chat_service)],
 ) -> ChatSessionListItem:
     """把归档会话恢复到默认列表。"""
-    return _list_item_payload(service.restore(session_id), service)
+    try:
+        row = service.restore(session_id)
+    except KeyError as exc:
+        raise _not_found() from exc
+    return _list_item_payload(row, service)
 
 
 @router.delete("/sessions/{session_id}")
@@ -151,9 +163,13 @@ def delete_session(
     purge: bool = False,
 ) -> dict:
     """默认归档会话；purge=true 时连同消息永久删除。"""
-    if purge:
-        service.purge(session_id)
-        return {"deleted": True}
+    try:
+        if purge:
+            service.purge(session_id)
+            return {"deleted": True}
+        service.archive(session_id)
+    except KeyError as exc:
+        raise _not_found() from exc
     return {"archived": True}
 
 

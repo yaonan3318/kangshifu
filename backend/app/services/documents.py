@@ -193,16 +193,35 @@ class DocumentService:
         return self.get(document.id)
 
     def versions(self, document_id: uuid.UUID) -> list[Document]:
+        """返回版本链；入口要求可读，链上每个版本再按当前用户重新鉴权。
+
+        遍历链条时使用全部子节点，确保中间版本不可读时仍能找到后续可读版本；
+        但最终返回值只包含当前用户可读的版本，避免通过版本 API 越权查看。
+        """
         document = self.get(document_id, include_deleted=True)
         root_id = document.id
-        while document.previous_version_id:
-            root_id = document.previous_version_id
-            document = self.get(root_id, include_deleted=True)
-        values = [document]
+        # 沿 previous_version_id 向上找根版本，不在此处鉴权，交给最终过滤。
+        seen: set[uuid.UUID] = {document.id}
+        current = document
+        while current.previous_version_id and current.previous_version_id not in seen:
+            parent = self.session.get(Document, current.previous_version_id)
+            if parent is None:
+                break
+            seen.add(parent.id)
+            current = parent
+            root_id = parent.id
+
+        def readable(candidate: Document) -> bool:
+            return self.resolver is None or self.resolver.can_read(candidate)
+
+        values: list[Document] = []
+        root = self.session.get(Document, root_id)
+        if root is not None and readable(root):
+            values.append(root)
         frontier = [root_id]
         while frontier:
             children = list(self.session.scalars(select(Document).where(Document.previous_version_id.in_(frontier))))
-            values.extend(children)
+            values.extend(child for child in children if readable(child))
             frontier = [item.id for item in children]
         return sorted({item.id: item for item in values}.values(), key=lambda item: item.version_number, reverse=True)
 

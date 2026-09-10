@@ -12,7 +12,7 @@ from app.db import get_session
 from app.models import Document, DocumentAcl, SubjectType
 from app.schemas.identity import RoleCreateRequest, RoleListResponse, RoleOut, RoleUpdateRequest, RoleUsersRequest
 from app.services import identity
-from app.services.audit import record as audit_record
+from app.services.audit import audit_action
 from app.services.permissions import require_admin
 
 router = APIRouter(prefix="/api/roles", tags=["roles"])
@@ -48,11 +48,12 @@ def create_role(
     session: Annotated[Session, Depends(get_session)],
 ) -> RoleOut:
     admin = require_admin(current_user(request))
-    role = identity.create_role(session, name=body.name, description=body.description, enabled=body.enabled)
-    audit_record(
-        session, "role_created", user=admin, target_type="role", target_id=role.id,
-        detail={"name": role.name}, **_request_meta(request),
-    )
+    with audit_action(
+        session, "role_created", user=admin, target_type="role", **_request_meta(request),
+    ) as audit:
+        role = identity.create_role(session, name=body.name, description=body.description, enabled=body.enabled)
+        audit.id = role.id
+        audit.detail = {"name": role.name}
     return _role_out(session, role)
 
 
@@ -74,14 +75,14 @@ def update_role(
     session: Annotated[Session, Depends(get_session)],
 ) -> RoleOut:
     admin = require_admin(current_user(request))
-    role = identity.update_role(
-        session, role_id, name=body.name, description=body.description,
-        description_set="description" in body.model_fields_set, enabled=body.enabled,
-    )
-    audit_record(
-        session, "role_updated", user=admin, target_type="role", target_id=role.id,
+    with audit_action(
+        session, "role_updated", user=admin, target_type="role", target_id=role_id,
         detail={"fields": sorted(body.model_fields_set)}, **_request_meta(request),
-    )
+    ):
+        role = identity.update_role(
+            session, role_id, name=body.name, description=body.description,
+            description_set="description" in body.model_fields_set, enabled=body.enabled,
+        )
     return _role_out(session, role)
 
 
@@ -92,11 +93,11 @@ def enable_role(
     session: Annotated[Session, Depends(get_session)],
 ) -> RoleOut:
     admin = require_admin(current_user(request))
-    role = identity.set_role_enabled(session, role_id, True)
-    audit_record(
-        session, "role_enabled", user=admin, target_type="role", target_id=role.id,
-        detail={"name": role.name}, **_request_meta(request),
-    )
+    with audit_action(
+        session, "role_enabled", user=admin, target_type="role", target_id=role_id,
+        **_request_meta(request),
+    ):
+        role = identity.set_role_enabled(session, role_id, True)
     return _role_out(session, role)
 
 
@@ -107,11 +108,11 @@ def disable_role(
     session: Annotated[Session, Depends(get_session)],
 ) -> RoleOut:
     admin = require_admin(current_user(request))
-    role = identity.set_role_enabled(session, role_id, False)
-    audit_record(
-        session, "role_disabled", user=admin, target_type="role", target_id=role.id,
-        detail={"name": role.name}, **_request_meta(request),
-    )
+    with audit_action(
+        session, "role_disabled", user=admin, target_type="role", target_id=role_id,
+        **_request_meta(request),
+    ):
+        role = identity.set_role_enabled(session, role_id, False)
     return _role_out(session, role)
 
 
@@ -123,11 +124,11 @@ def set_role_users(
     session: Annotated[Session, Depends(get_session)],
 ) -> RoleOut:
     admin = require_admin(current_user(request))
-    role = identity.set_role_users(session, role_id, body.user_ids)
-    audit_record(
-        session, "role_assignment_changed", user=admin, target_type="role", target_id=role.id,
+    with audit_action(
+        session, "role_assignment_changed", user=admin, target_type="role", target_id=role_id,
         detail={"user_ids": [str(item) for item in body.user_ids]}, **_request_meta(request),
-    )
+    ):
+        role = identity.set_role_users(session, role_id, body.user_ids)
     return _role_out(session, role)
 
 
