@@ -11,12 +11,14 @@ from app.config import Settings, get_settings
 from app.db import get_session
 from app.schemas.retrieval_lab import RetrievalInspectRequest, RetrievalInspectResponse, TestCaseCreate, TestCaseListResponse, TestCaseResponse, TestCaseUpdate, TestRunListResponse, TestRunResponse
 from app.schemas.search import SearchRequest
-from app.services.permissions import require_admin
+from app.services.rbac import require_permission
 from app.services.retrieval_evaluation import RetrievalEvaluationService
 from app.services.search import SearchService
 
 
 router = APIRouter(prefix="/api/retrieval-lab", tags=["retrieval-lab"])
+
+RETRIEVAL_LAB_USE = "RETRIEVAL_LAB_USE"
 
 
 def get_service(
@@ -24,13 +26,13 @@ def get_service(
     session: Annotated[Session, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> RetrievalEvaluationService:
-    require_admin(current_user(request))
-    return RetrievalEvaluationService(session, settings, user=current_user(request))
+    user = require_permission(current_user(request), RETRIEVAL_LAB_USE)
+    return RetrievalEvaluationService(session, settings, user=user)
 
 
 @router.post("/inspect", response_model=RetrievalInspectResponse)
 def inspect(body: RetrievalInspectRequest, http_request: Request, session: Annotated[Session, Depends(get_session)], settings: Annotated[Settings, Depends(get_settings)]):
-    user = require_admin(current_user(http_request))
+    user = require_permission(current_user(http_request), RETRIEVAL_LAB_USE)
     outcome = SearchService(session, settings, user=user).search_with_diagnostics(SearchRequest(
         query=body.query, knowledge_base_id=body.knowledge_base_id, limit=body.limit, include_stages=True,
     ))

@@ -98,6 +98,16 @@ export async function getDocumentAcl(id: string): Promise<{ items: AclItem[] }> 
   return parseResponse(await fetch(`/api/documents/${id}/acl`))
 }
 
+export interface AclReferences {
+  departments: Array<{ id: string; name: string; parent_id: string | null; enabled: boolean; children: AclReferences['departments'] }>
+  roles: Array<{ id: string; name: string; enabled: boolean }>
+  users: Array<{ id: string; display_name: string; username: string; enabled: boolean }>
+}
+
+export async function getAclReferences(): Promise<AclReferences> {
+  return parseResponse(await fetch('/api/documents/acl-references'))
+}
+
 export async function setDocumentAccess(id: string, body: { visibility?: string; acl?: AclEntry[] }): Promise<DocumentRecord> {
   return parseResponse(await fetch(`/api/documents/${id}/access`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),

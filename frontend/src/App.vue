@@ -7,6 +7,7 @@ import RetrievalLab from './features/search/RetrievalLab.vue'
 import SystemAdmin from './features/admin/SystemAdmin.vue'
 import LoginPanel from './components/LoginPanel.vue'
 import { getAuthState, logoutRequest, type AuthUser } from './api/auth'
+import { clearPermissions, hasAnyPermission, hasPermission, setPermissions } from './utils/permissions'
 
 type PageKey = 'answer' | 'search' | 'library' | 'lab' | 'system'
 const LAST_PAGE_PREFIX = 'company-search:last-page:'
@@ -28,22 +29,32 @@ const pages: Record<PageKey, unknown> = {
 
 const activePage = computed(() => pages[page.value])
 
+const SYSTEM_PERMISSIONS = ['IDENTITY_MANAGE', 'ASSISTANT_MANAGE', 'AUDIT_VIEW', 'STATS_VIEW'] as const
+
 const navItems = computed(() => {
-  const items: Array<{ key: PageKey; label: string }> = [
-    { key: 'answer', label: '知识问答' },
-    { key: 'search', label: '资料检索' },
-    { key: 'library', label: '资料库' },
-  ]
-  if (isSuper.value) {
-    items.push({ key: 'lab', label: '检索实验室' })
-    items.push({ key: 'system', label: '系统管理' })
-  }
+  const items: Array<{ key: PageKey; label: string }> = []
+  if (hasPermission('ANSWER_USE')) items.push({ key: 'answer', label: '知识问答' })
+  if (hasPermission('SEARCH_USE')) items.push({ key: 'search', label: '资料检索' })
+  if (hasPermission('DOCUMENT_VIEW')) items.push({ key: 'library', label: '资料库' })
+  if (hasPermission('RETRIEVAL_LAB_USE')) items.push({ key: 'lab', label: '检索实验室' })
+  if (isSuper.value || hasAnyPermission([...SYSTEM_PERMISSIONS])) items.push({ key: 'system', label: '系统管理' })
   return items
 })
 
 function isPageAllowed(target: PageKey, user: AuthUser | null = currentUser.value): boolean {
   if (!(target in pages)) return false
-  return !['lab', 'system'].includes(target) || Boolean(user?.is_super_admin)
+  if (target === 'answer') return hasPermission('ANSWER_USE')
+  if (target === 'search') return hasPermission('SEARCH_USE')
+  if (target === 'library') return hasPermission('DOCUMENT_VIEW')
+  if (target === 'lab') return hasPermission('RETRIEVAL_LAB_USE')
+  if (target === 'system') return Boolean(user?.is_super_admin) || hasAnyPermission([...SYSTEM_PERMISSIONS])
+  return false
+}
+
+const PAGE_ORDER: PageKey[] = ['answer', 'search', 'library', 'lab', 'system']
+
+function defaultPageFor(user: AuthUser | null): PageKey {
+  return PAGE_ORDER.find((key) => isPageAllowed(key, user)) ?? 'answer'
 }
 
 function restorePageForUser(user: AuthUser | null) {
@@ -52,7 +63,7 @@ function restorePageForUser(user: AuthUser | null) {
     return
   }
   const stored = window.localStorage.getItem(`${LAST_PAGE_PREFIX}${user.id}`) as PageKey | null
-  page.value = stored && isPageAllowed(stored, user) ? stored : 'answer'
+  page.value = stored && isPageAllowed(stored, user) ? stored : defaultPageFor(user)
 }
 
 provide('currentUser', currentUser)
@@ -64,6 +75,7 @@ function onSwitchPage(event: Event) {
 
 function onAuthExpired() {
   currentUser.value = null
+  clearPermissions()
 }
 
 async function boot() {
@@ -71,9 +83,11 @@ async function boot() {
   try {
     const state = await getAuthState()
     currentUser.value = state.user
+    setPermissions(state.user?.permissions)
     restorePageForUser(state.user)
   } catch {
     currentUser.value = null
+    clearPermissions()
     page.value = 'answer'
   } finally {
     checking.value = false
@@ -89,6 +103,7 @@ async function handleLogout() {
     await logoutRequest()
   } finally {
     currentUser.value = null
+    clearPermissions()
     sessionStarted.value = false
     page.value = 'answer'
   }

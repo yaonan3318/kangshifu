@@ -10,6 +10,7 @@ export interface AuthUser {
   last_login_at: string | null
   department_name: string | null
   roles: string[]
+  permissions: string[]
 }
 
 export interface AuthMe {

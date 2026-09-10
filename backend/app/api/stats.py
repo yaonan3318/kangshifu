@@ -10,16 +10,16 @@ from sqlalchemy.orm import Session
 from app.db import get_session
 from app.errors import AppError
 from app.models import ChatMessage, ChatMessageRole, ChatMessageSource, ChatSession
+from app.services.rbac import require_permission
 from app.services.stats import compute_overview
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
+STATS_VIEW = "STATS_VIEW"
 
-def _admin(request: Request):
-    user = getattr(request.state, "auth_user", None)
-    if user is None or not user.is_super_admin:
-        raise AppError("ADMIN_REQUIRED", "需要管理员权限", 403)
-    return user
+
+def _stats_user(request: Request):
+    return require_permission(getattr(request.state, "auth_user", None), STATS_VIEW)
 
 
 @router.get("/overview")
@@ -29,7 +29,7 @@ def stats_overview(
     days: int = 7,
 ) -> dict:
     """返回最近 N 天问答、检索、成功率、反馈与热点统计。"""
-    return compute_overview(session, _admin(request), days=days)
+    return compute_overview(session, _stats_user(request), days=days)
 
 
 @router.get("/trace/{message_id}")
@@ -39,7 +39,7 @@ def message_trace(
     session: Annotated[Session, Depends(get_session)],
 ) -> dict:
     """返回单条助手回答的追踪信息：问题、答案、引用快照与阶段耗时。"""
-    _admin(request)
+    _stats_user(request)
     message = session.get(ChatMessage, message_id)
     if message is None or message.role != ChatMessageRole.ASSISTANT:
         raise AppError("MESSAGE_NOT_FOUND", "回答消息不存在", 404)

@@ -21,6 +21,7 @@ class UserOut(BaseModel):
     last_login_at: datetime | None
     department_name: str | None
     roles: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
 
 
 class AuthMeResponse(BaseModel):

@@ -128,8 +128,8 @@ def list_logs(
     created_from: datetime | None = None, created_to: datetime | None = None,
     limit: int = 50, offset: int = 0,
 ) -> tuple[list[AuditLog], int]:
-    if user is None or not user.is_super_admin:
-        raise AppError("ADMIN_REQUIRED", "需要管理员权限", 403)
+    if user is None:
+        raise AppError("AUTH_REQUIRED", "请先登录", 401)
     filters = []
     if action:
         filters.append(AuditLog.action == action)

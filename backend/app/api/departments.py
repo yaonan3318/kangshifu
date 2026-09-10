@@ -11,9 +11,11 @@ from app.db import get_session
 from app.schemas.identity import DepartmentCreateRequest, DepartmentOut, DepartmentTreeNode, DepartmentUpdateRequest
 from app.services import identity
 from app.services.audit import audit_action
-from app.services.permissions import require_admin, require_user
+from app.services.rbac import require_permission
 
 router = APIRouter(prefix="/api/departments", tags=["departments"])
+
+IDENTITY_MANAGE = "IDENTITY_MANAGE"
 
 
 def _request_meta(request: Request) -> dict:
@@ -28,7 +30,7 @@ def department_tree(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> list[DepartmentTreeNode]:
-    require_user(current_user(request))
+    require_permission(current_user(request), IDENTITY_MANAGE)
     return [DepartmentTreeNode(**node) for node in identity.department_tree(session)]
 
 
@@ -38,7 +40,7 @@ def get_department(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> DepartmentOut:
-    require_user(current_user(request))
+    require_permission(current_user(request), IDENTITY_MANAGE)
     department = identity.load_department(session, department_id)
     return DepartmentOut(**identity.department_payload(session, department))
 
@@ -49,7 +51,7 @@ def create_department(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> DepartmentOut:
-    admin = require_admin(current_user(request))
+    admin = require_permission(current_user(request), IDENTITY_MANAGE)
     with audit_action(
         session, "department_created", user=admin, target_type="department", **_request_meta(request),
     ) as audit:
@@ -68,7 +70,7 @@ def update_department(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> DepartmentOut:
-    admin = require_admin(current_user(request))
+    admin = require_permission(current_user(request), IDENTITY_MANAGE)
     with audit_action(
         session, "department_updated", user=admin, target_type="department", target_id=department_id,
         detail={"fields": sorted(body.model_fields_set)}, **_request_meta(request),
@@ -86,7 +88,7 @@ def enable_department(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> DepartmentOut:
-    admin = require_admin(current_user(request))
+    admin = require_permission(current_user(request), IDENTITY_MANAGE)
     with audit_action(
         session, "department_enabled", user=admin, target_type="department", target_id=department_id,
         **_request_meta(request),
@@ -101,7 +103,7 @@ def disable_department(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> DepartmentOut:
-    admin = require_admin(current_user(request))
+    admin = require_permission(current_user(request), IDENTITY_MANAGE)
     with audit_action(
         session, "department_disabled", user=admin, target_type="department", target_id=department_id,
         **_request_meta(request),

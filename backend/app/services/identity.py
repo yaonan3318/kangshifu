@@ -12,9 +12,11 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.errors import AppError
 from app.models import (
-    AuthSession, Department, DocumentAcl, Role, SubjectType, User, user_roles,
+    AuthSession, Department, DocumentAcl, Permission, Role, SubjectType, User,
+    role_permissions, user_roles,
 )
 from app.services.auth import hash_password
+from app.services.rbac import PERMISSION_CODES
 
 
 # ---------------------------------------------------------------- 用户
@@ -311,24 +313,57 @@ def _role_document_count(session: Session, role_id: uuid.UUID) -> int:
 
 
 def role_payload(session: Session, role: Role) -> dict:
+    codes = sorted(permission.code for permission in role.permissions)
     return {
         "id": role.id, "name": role.name, "description": role.description,
         "enabled": role.enabled, "created_at": role.created_at, "updated_at": role.updated_at,
         "user_count": _role_user_count(session, role.id),
         "document_count": _role_document_count(session, role.id),
+        "permissions": codes, "permission_count": len(codes),
     }
 
 
 def list_roles(session: Session, page: int = 1, page_size: int = 50) -> tuple[list[dict], int]:
     total = session.scalar(select(func.count()).select_from(Role)) or 0
     rows = list(session.scalars(
-        select(Role).order_by(Role.created_at.asc()).offset((page - 1) * page_size).limit(page_size)
+        select(Role).options(selectinload(Role.permissions))
+        .order_by(Role.created_at.asc()).offset((page - 1) * page_size).limit(page_size)
     ))
     return [role_payload(session, role) for role in rows], total
 
 
+def _validate_permission_codes(session: Session, codes: list[str]) -> list[str]:
+    unique = list(dict.fromkeys(code.strip() for code in codes if code and code.strip()))
+    unknown = [code for code in unique if code not in PERMISSION_CODES]
+    if unknown:
+        raise AppError("PERMISSION_CODE_INVALID", "存在无效的功能权限码", 422, {"codes": unknown})
+    return unique
+
+
+def set_role_permissions(session: Session, role: Role, codes: list[str]) -> dict:
+    """覆盖设置角色权限，返回新增/移除的权限码；不修改用户角色绑定。"""
+    desired = set(_validate_permission_codes(session, codes))
+    current = {permission.code for permission in role.permissions}
+    added = sorted(desired - current)
+    removed = sorted(current - desired)
+    if added or removed:
+        session.execute(delete(role_permissions).where(role_permissions.c.role_id == role.id))
+        if desired:
+            session.execute(
+                role_permissions.insert(),
+                [{"role_id": role.id, "permission_code": code} for code in sorted(desired)],
+            )
+        # 触碰角色时间戳，让基于权限指纹的回答缓存立即失效。
+        role.updated_at = datetime.now(UTC)
+        session.commit()
+        session.expire(role, ["permissions"])
+    return {"added": added, "removed": removed}
+
+
 def load_role(session: Session, role_id: uuid.UUID) -> Role:
-    role = session.get(Role, role_id)
+    role = session.scalar(
+        select(Role).where(Role.id == role_id).options(selectinload(Role.permissions))
+    )
     if role is None:
         raise AppError("ROLE_NOT_FOUND", "角色不存在", 404)
     return role
@@ -341,7 +376,10 @@ def _role_name_taken(session: Session, name: str, exclude_id: uuid.UUID | None =
     return session.scalar(select(Role.id).where(*filters)) is not None
 
 
-def create_role(session: Session, *, name: str, description: str | None, enabled: bool) -> Role:
+def create_role(
+    session: Session, *, name: str, description: str | None, enabled: bool,
+    permissions: list[str] | None = None,
+) -> Role:
     cleaned = name.strip()
     if not cleaned:
         raise AppError("ROLE_NAME_REQUIRED", "角色名称不能为空", 422)
@@ -351,6 +389,8 @@ def create_role(session: Session, *, name: str, description: str | None, enabled
     session.add(role)
     session.commit()
     session.refresh(role)
+    if permissions:
+        set_role_permissions(session, role, permissions)
     return role
 
 

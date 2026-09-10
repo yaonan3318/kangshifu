@@ -15,6 +15,7 @@ from app.services.auth import (
     LoginRateLimiter, authenticate, create_session_token, find_by_token, revoke_session,
 )
 from app.services.permissions import require_user
+from app.services.rbac import effective_permissions
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 limiter = LoginRateLimiter()
@@ -29,6 +30,7 @@ def _user_out(user: User) -> UserOut:
         is_super_admin=user.is_super_admin, last_login_at=user.last_login_at,
         department_name=user.department.name if user.department else None,
         roles=[role.name for role in user.roles if role.enabled],
+        permissions=sorted(effective_permissions(user)),
     )
 
 
@@ -119,11 +121,21 @@ async def me(
         if auth_session:
             user = session.scalar(
                 select(User).where(User.id == auth_session.user_id)
-                .options(selectinload(User.roles), selectinload(User.department))
+                .options(
+                    selectinload(User.roles).selectinload(Role.permissions),
+                    selectinload(User.department),
+                )
             )
     if user is None or not user.enabled:
         return AuthMeResponse(authenticated=False)
     return AuthMeResponse(authenticated=True, user=_user_out(user))
+
+
+@router.get("/permissions", tags=["auth"])
+async def list_permissions(request: Request) -> dict:
+    """当前用户的有效权限码；前端据此恢复菜单（不能按角色名自行推算）。"""
+    user = require_user(current_user(request))
+    return {"permissions": sorted(effective_permissions(user))}
 
 
 @router.get("/departments", tags=["auth"])

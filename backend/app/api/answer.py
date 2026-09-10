@@ -21,9 +21,13 @@ from app.schemas.answer import AnswerEvent, AnswerRequest, AnswerStatusResponse
 from app.services.chat import AnswerRecorder, ChatService
 from app.services.audit import record as audit_record
 from app.services.harness import HarnessService
+from app.services.permissions import require_user
 from app.services.rag import RagService
+from app.services.rbac import require_permission
 
 router = APIRouter(prefix="/api/answer", tags=["answer"])
+
+ANSWER_USE = "ANSWER_USE"
 logger = logging.getLogger(__name__)
 
 
@@ -68,14 +72,16 @@ def apply_assistant_runtime_policy(
 
 
 @router.get("/status", response_model=AnswerStatusResponse)
-async def answer_status(service: Annotated[RagService, Depends(get_rag_service)]) -> AnswerStatusResponse:
-    """检查本地 Ollama 模型是否就绪以及 DeepSeek 是否已配置。"""
+async def answer_status(request: Request, service: Annotated[RagService, Depends(get_rag_service)]) -> AnswerStatusResponse:
+    """检查本地 Ollama 模型是否就绪以及 DeepSeek 是否已配置；登录后可访问。"""
+    require_user(getattr(request.state, "auth_user", None))
     return await service.status()
 
 
 @router.post("/warmup")
-async def answer_warmup(service: Annotated[RagService, Depends(get_rag_service)]) -> dict:
+async def answer_warmup(request: Request, service: Annotated[RagService, Depends(get_rag_service)]) -> dict:
     """预热本地模型：把模型加载进驻留内存，显著加快首次问答。"""
+    require_permission(getattr(request.state, "auth_user", None), ANSWER_USE)
     warmed = await service.ollama.warmup()
     return {"warmed": warmed, "message": "本地模型已预热" if warmed else "预热失败，请检查 Ollama"}
 
@@ -92,7 +98,7 @@ async def answer_stream(
     会话由前端传入 session_id；未传入时自动新建会话并把首问作为标题。
     """
     # 提前校验会话存在（归档会话也可继续提问），避免进入流式阶段后才发现 404。
-    chat_user = getattr(request.state, "auth_user", None)
+    chat_user = require_permission(getattr(request.state, "auth_user", None), ANSWER_USE)
     body = apply_assistant_runtime_policy(session, body, chat_user)
     # Harness 可执行运维工具，权限闭环前仅限管理员使用，避免绕过文档权限。
     if body.use_harness and (chat_user is None or not chat_user.is_super_admin):

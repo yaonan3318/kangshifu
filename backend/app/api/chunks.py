@@ -12,9 +12,13 @@ from app.db import get_session
 from app.schemas.chunks import ChunkListResponse, ChunkResponse, ChunkUpdateRequest
 from app.services.audit import audit_action
 from app.services.chunks import ChunkService
+from app.services.rbac import require_permission
 
 
 router = APIRouter(prefix="/api", tags=["chunks"])
+
+DOCUMENT_VIEW = "DOCUMENT_VIEW"
+DOCUMENT_MANAGE = "DOCUMENT_MANAGE"
 
 
 def get_service(
@@ -33,13 +37,15 @@ def _meta(request: Request) -> dict:
 
 
 @router.get("/documents/{document_id}/chunks", response_model=ChunkListResponse)
-def list_chunks(document_id: uuid.UUID, service: Annotated[ChunkService, Depends(get_service)], page: Annotated[int, Query(ge=1)] = 1, page_size: Annotated[int, Query(ge=1, le=100)] = 25):
+def list_chunks(document_id: uuid.UUID, request: Request, service: Annotated[ChunkService, Depends(get_service)], page: Annotated[int, Query(ge=1)] = 1, page_size: Annotated[int, Query(ge=1, le=100)] = 25):
+    require_permission(current_user(request), DOCUMENT_VIEW)
     items, total = service.list_chunks(document_id, page, page_size)
     return ChunkListResponse(items=[ChunkResponse.model_validate(item) for item in items], page=page, page_size=page_size, total=total)
 
 
 @router.patch("/chunks/{chunk_id}", response_model=ChunkResponse)
 def update_chunk(chunk_id: uuid.UUID, body: ChunkUpdateRequest, request: Request, service: Annotated[ChunkService, Depends(get_service)]):
+    require_permission(current_user(request), DOCUMENT_MANAGE)
     with audit_action(
         service.session, "chunk_updated", user=current_user(request),
         target_type="document_chunk", target_id=chunk_id, **_meta(request),
@@ -51,6 +57,7 @@ def update_chunk(chunk_id: uuid.UUID, body: ChunkUpdateRequest, request: Request
 
 @router.post("/chunks/{chunk_id}/enable", response_model=ChunkResponse)
 def enable_chunk(chunk_id: uuid.UUID, request: Request, service: Annotated[ChunkService, Depends(get_service)]):
+    require_permission(current_user(request), DOCUMENT_MANAGE)
     with audit_action(
         service.session, "chunk_updated", user=current_user(request),
         target_type="document_chunk", target_id=chunk_id, **_meta(request),
@@ -62,6 +69,7 @@ def enable_chunk(chunk_id: uuid.UUID, request: Request, service: Annotated[Chunk
 
 @router.post("/chunks/{chunk_id}/disable", response_model=ChunkResponse)
 def disable_chunk(chunk_id: uuid.UUID, request: Request, service: Annotated[ChunkService, Depends(get_service)]):
+    require_permission(current_user(request), DOCUMENT_MANAGE)
     with audit_action(
         service.session, "chunk_updated", user=current_user(request),
         target_type="document_chunk", target_id=chunk_id, **_meta(request),
@@ -73,6 +81,7 @@ def disable_chunk(chunk_id: uuid.UUID, request: Request, service: Annotated[Chun
 
 @router.post("/chunks/{chunk_id}/reindex", response_model=ChunkResponse)
 def reindex_chunk(chunk_id: uuid.UUID, request: Request, service: Annotated[ChunkService, Depends(get_service)]):
+    require_permission(current_user(request), DOCUMENT_MANAGE)
     with audit_action(
         service.session, "chunk_updated", user=current_user(request),
         target_type="document_chunk", target_id=chunk_id, **_meta(request),
@@ -84,6 +93,7 @@ def reindex_chunk(chunk_id: uuid.UUID, request: Request, service: Annotated[Chun
 
 @router.post("/chunks/{chunk_id}/restore-original", response_model=ChunkResponse)
 def restore_chunk(chunk_id: uuid.UUID, request: Request, service: Annotated[ChunkService, Depends(get_service)]):
+    require_permission(current_user(request), DOCUMENT_MANAGE)
     with audit_action(
         service.session, "chunk_updated", user=current_user(request),
         target_type="document_chunk", target_id=chunk_id, **_meta(request),

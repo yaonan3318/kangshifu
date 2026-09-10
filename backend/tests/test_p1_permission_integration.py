@@ -99,11 +99,20 @@ def seeded(client):
         session.add_all([tech, hr, role, disabled_role])
         session.flush()
 
-        def make_user(username: str, department_id, role_row=None, super_admin=False) -> User:
+        # 功能级 RBAC 默认角色：普通用户至少要有基础使用权限，才能测试文档 ACL。
+        base_role = session.scalar(select(Role).where(Role.name == "普通员工"))
+        maintainer_role = session.scalar(select(Role).where(Role.name == "资料维护员"))
+
+        def make_user(
+            username: str, department_id, role_row=None, super_admin=False, extra_roles=(),
+        ) -> User:
             user = User(
                 username=username, display_name=username, password_hash=hash_password(PASSWORD),
                 department_id=department_id, enabled=True, is_super_admin=super_admin,
             )
+            for extra in extra_roles:
+                if extra is not None:
+                    user.roles.append(extra)
             if role_row is not None:
                 user.roles.append(role_row)
             session.add(user)
@@ -111,10 +120,10 @@ def seeded(client):
             return user
 
         admin = session.scalar(select(User).where(User.username == "admin"))
-        tech_user = make_user("tech_user", tech.id)
-        hr_user = make_user("hr_user", hr.id)
-        role_user = make_user("role_user", None, role)
-        other_user = make_user("other_user", None)
+        tech_user = make_user("tech_user", tech.id, extra_roles=(base_role, maintainer_role))
+        hr_user = make_user("hr_user", hr.id, extra_roles=(base_role,))
+        role_user = make_user("role_user", None, role, extra_roles=(base_role,))
+        other_user = make_user("other_user", None, extra_roles=(base_role,))
         session.commit()
 
         def make_document(name: str, visibility: DocumentVisibility, owner=None, **kwargs) -> Document:
@@ -1043,3 +1052,197 @@ def test_answer_api_audits_external_block_without_leaking_content(client, seeded
     # 审计不得包含完整上下文正文或 API Key。
     assert "alpha secret" not in str(log.detail)
     assert "sk-" not in str(log.detail)
+
+
+# ======================================================================
+# 功能级 RBAC：默认角色矩阵与接口收口
+# ======================================================================
+
+BATCH_BODY = {
+    "name": "rbac-batch",
+    "files": [{"relative_path": "a.txt", "original_name": "a.txt", "size_bytes": 1}],
+}
+
+
+@pytest.fixture(scope="module")
+def rbac_users(client, seeded):
+    """按需求默认角色建立五类账号矩阵（admin 已存在）。"""
+    ids: dict[str, object] = {}
+    with SessionLocal() as session:
+        def role_by_name(name: str):
+            return session.scalar(select(Role).where(Role.name == name))
+
+        def make(username: str, role_name: str | None) -> User:
+            user = User(
+                username=username, display_name=username, password_hash=hash_password(PASSWORD),
+                department_id=None, enabled=True, is_super_admin=False,
+            )
+            if role_name:
+                user.roles.append(role_by_name(role_name))
+            session.add(user)
+            session.flush()
+            return user
+
+        ids["employee"] = make("employee", "普通员工")
+        ids["maintainer"] = make("maintainer", "资料维护员")
+        ids["kb_admin"] = make("kb_admin", "知识库管理员")
+        ids["no_role"] = make("no_role", None)
+        session.commit()
+    return ids
+
+
+def test_rbac_me_returns_effective_permissions(client, rbac_users):
+    _login(client, "employee")
+    user = client.get("/api/auth/me").json()["user"]
+    assert set(user["permissions"]) == {"ANSWER_USE", "SEARCH_USE", "DOCUMENT_VIEW"}
+    assert user["roles"] == ["普通员工"]
+    _logout(client)
+
+
+def test_rbac_super_admin_gets_all_permissions(client, rbac_users):
+    _login(client, "admin")
+    permissions = set(client.get("/api/auth/me").json()["user"]["permissions"])
+    assert {"ANSWER_USE", "IDENTITY_MANAGE", "AUDIT_VIEW", "STATS_VIEW", "HARNESS_USE"} <= permissions
+    _logout(client)
+
+
+def test_rbac_no_role_has_no_function_permissions(client, rbac_users):
+    _login(client, "no_role")
+    assert client.post("/api/search", json={"query": "alpha"}).status_code == 403
+    assert client.get("/api/documents").status_code == 403
+    assert client.post("/api/answer/stream", json={"question": "alpha"}).status_code == 403
+    _logout(client)
+
+
+def test_rbac_unauthenticated_returns_401(client, rbac_users):
+    client.cookies.clear()
+    assert client.post("/api/search", json={"query": "alpha"}).status_code == 401
+    assert client.get("/api/documents").status_code == 401
+    assert client.post("/api/batches", json=BATCH_BODY).status_code == 401
+
+
+def test_rbac_employee_cannot_upload_but_maintainer_can(client, rbac_users):
+    _login(client, "employee")
+    assert client.post("/api/batches", json=BATCH_BODY).status_code == 403
+    _logout(client)
+
+    _login(client, "maintainer")
+    assert client.post("/api/batches", json=BATCH_BODY).status_code == 201
+    _logout(client)
+
+
+def test_rbac_knowledge_base_manage_is_scoped(client, rbac_users):
+    _login(client, "maintainer")
+    assert client.post("/api/knowledge-bases", json={"name": "维护员不能建库"}).status_code == 403
+    _logout(client)
+
+    _login(client, "kb_admin")
+    assert client.post("/api/knowledge-bases", json={"name": "知识库管理员建库"}).status_code == 201
+    _logout(client)
+
+
+def test_rbac_function_permission_cannot_bypass_document_acl(client, rbac_users, seeded):
+    _login(client, "maintainer")
+    # 有 DOCUMENT_VIEW / DOCUMENT_MANAGE，但 role_doc 的 ACL 未授权给该用户。
+    assert client.get(f"/api/documents/{seeded['role_doc'].id}").status_code == 403
+    assert client.put(
+        f"/api/documents/{seeded['role_doc'].id}/access", json={"visibility": "COMPANY"},
+    ).status_code == 403
+    _logout(client)
+
+
+def test_rbac_identity_and_audit_endpoints_scoped(client, rbac_users):
+    _login(client, "maintainer")
+    # 身份与角色管理全部要求 IDENTITY_MANAGE。
+    assert client.get("/api/users").status_code == 403
+    assert client.get("/api/roles").status_code == 403
+    assert client.post("/api/users", json={
+        "username": "maintainer_made", "display_name": "x", "password": "password123",
+    }).status_code == 403
+    assert client.post("/api/roles", json={"name": "维护员不能建角色"}).status_code == 403
+    assert client.post("/api/departments", json={"name": "维护员不能建部门"}).status_code == 403
+    # 但可以读取 ACL 编辑所需的引用数据。
+    assert client.get("/api/documents/acl-references").status_code == 200
+    assert client.get("/api/audit/logs").status_code == 403
+    assert client.get("/api/stats/overview").status_code == 403
+    assert client.post("/api/retrieval-lab/inspect", json={"query": "alpha"}).status_code == 403
+    assert client.post("/api/assistants", json={"name": "x"}).status_code == 403
+    _logout(client)
+
+
+def test_rbac_permission_catalog_hides_harness(client, rbac_users):
+    _login(client, "admin")
+    data = client.get("/api/roles/permissions").json()
+    codes = {item["code"] for item in data["items"]}
+    assert "HARNESS_USE" not in codes
+    assert {"ANSWER_USE", "DOCUMENT_MANAGE", "IDENTITY_MANAGE"} <= codes
+    _logout(client)
+
+
+def test_rbac_role_permissions_changed_audited(client, rbac_users):
+    _login(client, "admin")
+    created = client.post("/api/roles", json={
+        "name": "临时上传角色", "permissions": ["ANSWER_USE", "DOCUMENT_UPLOAD"],
+    })
+    assert created.status_code == 201, created.text
+    role = created.json()
+    assert role["permission_count"] == 2
+    updated = client.patch(f"/api/roles/{role['id']}", json={"permissions": ["ANSWER_USE"]})
+    assert updated.status_code == 200
+    assert updated.json()["permissions"] == ["ANSWER_USE"]
+    _logout(client)
+
+    with SessionLocal() as session:
+        log = session.scalar(
+            select(AuditLog).where(AuditLog.action == "role_permissions_changed")
+            .order_by(AuditLog.created_at.desc()).limit(1)
+        )
+        assert log is not None
+        assert "DOCUMENT_UPLOAD" in str(log.detail)
+
+
+def test_rbac_disabling_role_removes_function_permission(client, rbac_users):
+    with SessionLocal() as session:
+        role_id = session.scalar(select(Role.id).where(Role.name == "资料维护员"))
+    _login(client, "admin")
+    assert client.post(f"/api/roles/{role_id}/disable").status_code == 200
+    _logout(client)
+    try:
+        _login(client, "maintainer")
+        assert client.post("/api/batches", json=BATCH_BODY).status_code == 403
+        _logout(client)
+    finally:
+        _login(client, "admin")
+        client.post(f"/api/roles/{role_id}/enable")
+        _logout(client)
+
+
+def test_rbac_denials_are_audited_without_secrets(client, rbac_users):
+    _login(client, "employee")
+    client.post("/api/batches", json=BATCH_BODY)
+    client.post("/api/knowledge-bases", json={"name": "越权建库"})
+    _logout(client)
+
+    with SessionLocal() as session:
+        denied = session.scalar(
+            select(AuditLog).where(AuditLog.action == "authorization_denied")
+            .order_by(AuditLog.created_at.desc()).limit(1)
+        )
+        assert denied is not None
+        assert denied.success is False
+        assert denied.detail.get("missing_permission") == "KNOWLEDGE_BASE_MANAGE"
+        assert denied.detail.get("path") == "/api/knowledge-bases"
+        assert "password" not in str(denied.detail).lower()
+
+        upload_denied = session.scalar(
+            select(AuditLog).where(AuditLog.action == "document_upload_denied")
+            .order_by(AuditLog.created_at.desc()).limit(1)
+        )
+        assert upload_denied is not None
+        assert upload_denied.detail.get("missing_permission") == "DOCUMENT_UPLOAD"
+
+        kb_denied = session.scalar(
+            select(AuditLog).where(AuditLog.action == "knowledge_base_manage_denied")
+            .order_by(AuditLog.created_at.desc()).limit(1)
+        )
+        assert kb_denied is not None

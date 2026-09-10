@@ -9,8 +9,11 @@ from sqlalchemy.orm import Session
 from app.db import get_session
 from app.schemas.audit import AuditLogListResponse, AuditLogOut
 from app.services.audit import list_logs
+from app.services.rbac import require_permission
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
+
+AUDIT_VIEW = "AUDIT_VIEW"
 
 
 @router.get("/logs", response_model=AuditLogListResponse)
@@ -26,8 +29,9 @@ def query_logs(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
 ) -> AuditLogListResponse:
+    user = require_permission(getattr(request.state, "auth_user", None), AUDIT_VIEW)
     rows, total = list_logs(
-        session, getattr(request.state, "auth_user", None),
+        session, user,
         action=action, target_type=target_type, username=username, success=success,
         created_from=created_from, created_to=created_to,
         limit=page_size, offset=(page - 1) * page_size,

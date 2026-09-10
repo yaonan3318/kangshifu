@@ -36,7 +36,7 @@ from app.config import Settings, get_settings
 from app.db import SessionLocal, get_session
 from app.errors import AppError
 from app.llm.ollama import OllamaClient
-from app.models import User
+from app.models import Role, User
 from app.services.auth import bootstrap, find_by_token
 from app.services.audit import record as audit_record
 
@@ -105,7 +105,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if auth_session is not None:
                         user = session.scalar(
                             select(User).where(User.id == auth_session.user_id)
-                            .options(selectinload(User.roles), selectinload(User.department))
+                            .options(
+                                selectinload(User.roles).selectinload(Role.permissions),
+                                selectinload(User.department),
+                            )
                         )
             except Exception:
                 user = None
@@ -121,16 +124,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.exception_handler(AppError)
     async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
         """把可预期的业务异常统一转换成前端可识别的 JSON 结构。"""
-        if exc.code in ("ADMIN_REQUIRED", "HARNESS_FORBIDDEN"):
+        denial_codes = (
+            "ADMIN_REQUIRED", "HARNESS_FORBIDDEN", "PERMISSION_DENIED",
+            "DOCUMENT_FORBIDDEN", "DOCUMENT_MANAGE_FORBIDDEN",
+        )
+        if exc.code in denial_codes:
+            missing = (exc.details or {}).get("permission")
+            detail = {
+                "method": request.method,
+                "path": request.url.path,
+                "missing_permission": missing,
+            }
             audit_record(
                 None, "authorization_denied",
                 user=getattr(request.state, "auth_user", None),
-                target_type="api",
-                detail={"method": request.method, "path": request.url.path},
+                target_type="api", detail=detail,
                 ip_address=request.client.host if request.client else None,
                 success=False, error_code=exc.code,
                 request_id=request.headers.get("X-Request-ID"),
             )
+            # 需求点名的专项拒绝事件（审计失败不影响原始 403 响应）。
+            if missing == "DOCUMENT_UPLOAD":
+                audit_record(
+                    None, "document_upload_denied",
+                    user=getattr(request.state, "auth_user", None),
+                    target_type="api", detail=detail,
+                    ip_address=request.client.host if request.client else None,
+                    success=False, error_code=exc.code,
+                    request_id=request.headers.get("X-Request-ID"),
+                )
+            elif missing == "KNOWLEDGE_BASE_MANAGE":
+                audit_record(
+                    None, "knowledge_base_manage_denied",
+                    user=getattr(request.state, "auth_user", None),
+                    target_type="api", detail=detail,
+                    ip_address=request.client.host if request.client else None,
+                    success=False, error_code=exc.code,
+                    request_id=request.headers.get("X-Request-ID"),
+                )
         return JSONResponse(
             status_code=exc.status_code,
             content={"error": {"code": exc.code, "message": exc.message, "details": exc.details}},

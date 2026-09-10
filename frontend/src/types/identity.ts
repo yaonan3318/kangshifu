@@ -47,6 +47,26 @@ export interface RoleRecord {
   updated_at: string
   user_count: number
   document_count: number
+  permissions: string[]
+  permission_count: number
+}
+
+export interface PermissionItem {
+  code: string
+  name: string
+  description: string | null
+  category: string
+  sort_order: number
+}
+
+export interface PermissionCategory {
+  key: string
+  label: string
+}
+
+export interface PermissionCatalog {
+  categories: PermissionCategory[]
+  items: PermissionItem[]
 }
 
 export interface RoleListResponse {

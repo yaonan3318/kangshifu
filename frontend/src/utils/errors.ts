@@ -12,6 +12,8 @@ const STATUS_MESSAGES: Record<number, string> = {
 /** 把接口异常转换成统一的中文提示。 */
 export function errorMessage(reason: unknown, fallback = '请求失败'): string {
   if (reason instanceof ApiError) {
+    // 功能权限被后端拒绝时给出明确提示，避免被通用 403 文案覆盖。
+    if (reason.code === 'PERMISSION_DENIED') return '当前账号没有此功能权限'
     if (reason.status && STATUS_MESSAGES[reason.status]) return STATUS_MESSAGES[reason.status]
     return reason.message || fallback
   }

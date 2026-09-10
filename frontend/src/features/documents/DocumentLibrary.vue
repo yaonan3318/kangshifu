@@ -14,6 +14,7 @@ import { listKnowledgeBases } from '../../api/knowledgeBases'
 import type { KnowledgeBaseRecord } from '../../types/knowledgeBases'
 import KnowledgeBaseManager from './KnowledgeBaseManager.vue'
 import RecycleBin from './RecycleBin.vue'
+import { hasPermission } from '../../utils/permissions'
 
 const documents = ref<DocumentRecord[]>([])
 const total = ref(0)
@@ -24,7 +25,7 @@ const extension = ref('')
 const page = ref(1)
 const pageSize = 25
 const selectedDocument = ref<DocumentRecord | null>(null)
-const libraryMode = ref<'single'|'batch'|'history'>('single')
+const libraryMode = ref<'single'|'batch'|'history'>(hasPermission('DOCUMENT_UPLOAD') ? 'single' : 'history')
 const batches = ref<BatchRecord[]>([])
 const selectedBatch = ref<string | null>(null)
 const knowledgeBases = ref<KnowledgeBaseRecord[]>([])
@@ -112,7 +113,7 @@ onUnmounted(() => {
 <template>
   <main class="app-shell">
     <header class="hero"><p class="eyebrow">COMPANY SEARCH · LOCAL</p><h1>本地资料库</h1><p>文件只保存在这台 Mac 上。上传后会自动完成解析、OCR、切片和本地索引。</p></header>
-    <nav class="library-modes" aria-label="导入方式"><button :class="{active:libraryMode==='single'}" @click="libraryMode='single'">单文件上传</button><button :class="{active:libraryMode==='batch'}" @click="libraryMode='batch'">批量导入</button><button :class="{active:libraryMode==='history'}" @click="libraryMode='history';refreshBatches()">导入批次</button><button @click="showKnowledgeBases=true">管理知识库</button><button @click="showRecycleBin=true">回收站</button></nav>
+    <nav class="library-modes" aria-label="导入方式"><button v-if="hasPermission('DOCUMENT_UPLOAD')" :class="{active:libraryMode==='single'}" @click="libraryMode='single'">单文件上传</button><button v-if="hasPermission('DOCUMENT_UPLOAD')" :class="{active:libraryMode==='batch'}" @click="libraryMode='batch'">批量导入</button><button :class="{active:libraryMode==='history'}" @click="libraryMode='history';refreshBatches()">导入批次</button><button v-if="hasPermission('KNOWLEDGE_BASE_MANAGE')" @click="showKnowledgeBases=true">管理知识库</button><button v-if="hasPermission('DOCUMENT_MANAGE')" @click="showRecycleBin=true">回收站</button></nav>
     <UploadQueue v-if="libraryMode==='single'" :knowledge-bases="knowledgeBases" :knowledge-base-id="knowledgeBaseId" @uploaded="refresh" />
     <BatchImport v-else-if="libraryMode==='batch'" :knowledge-bases="knowledgeBases" :knowledge-base-id="knowledgeBaseId" @created="batchCreated" />
     <BatchList v-else :batches="batches" @open="selectedBatch=$event" />

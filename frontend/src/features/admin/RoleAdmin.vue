@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import {
-  createRole, disableRole, enableRole, getRoleDocuments, listRoles, setRoleUsers, updateRole,
+  createRole, disableRole, enableRole, getPermissionCatalog, getRoleDocuments, listRoles,
+  setRoleUsers, updateRole,
 } from '../../api/identity'
 import { listUsers } from '../../api/identity'
-import type { AdminUser, RoleDocument, RoleRecord } from '../../types/identity'
+import type {
+  AdminUser, PermissionCategory, PermissionItem, RoleDocument, RoleRecord,
+} from '../../types/identity'
 import { errorMessage } from '../../utils/errors'
 
 const roles = ref<RoleRecord[]>([])
@@ -18,8 +21,34 @@ const saving = ref(false)
 const documents = ref<RoleDocument[]>([])
 const selectedUserIds = ref<string[]>([])
 const showDocuments = ref(false)
+const permissionCategories = ref<PermissionCategory[]>([])
+const permissionItems = ref<PermissionItem[]>([])
 
-const form = reactive({ name: '', description: '', enabled: true })
+const form = reactive({ name: '', description: '', enabled: true, permissions: [] as string[] })
+
+const permissionGroups = computed(() => permissionCategories.value.map((category) => ({
+  ...category,
+  items: permissionItems.value.filter((item) => item.category === category.key),
+})))
+
+function categoryFullySelected(key: string): boolean {
+  const items = permissionItems.value.filter((item) => item.category === key)
+  return items.length > 0 && items.every((item) => form.permissions.includes(item.code))
+}
+
+function toggleCategory(key: string) {
+  const codes = permissionItems.value.filter((item) => item.category === key).map((item) => item.code)
+  if (categoryFullySelected(key)) {
+    form.permissions = form.permissions.filter((code) => !codes.includes(code))
+  } else {
+    form.permissions = Array.from(new Set([...form.permissions, ...codes]))
+  }
+}
+
+function togglePermission(code: string) {
+  if (form.permissions.includes(code)) form.permissions = form.permissions.filter((item) => item !== code)
+  else form.permissions = [...form.permissions, code]
+}
 
 async function refresh() {
   loading.value = true
@@ -42,6 +71,7 @@ function selectRole(role: RoleRecord) {
   form.name = role.name
   form.description = role.description ?? ''
   form.enabled = role.enabled
+  form.permissions = [...(role.permissions ?? [])]
   showDocuments.value = false
   documents.value = []
   void loadRoleUsers(role)
@@ -62,6 +92,7 @@ function startCreate() {
   form.name = ''
   form.description = ''
   form.enabled = true
+  form.permissions = []
   selectedUserIds.value = []
   showDocuments.value = false
   documents.value = []
@@ -79,13 +110,16 @@ async function save() {
   error.value = ''
   notice.value = ''
   try {
+    const permissions = [...form.permissions]
     if (creating.value) {
-      const role = await createRole({ name: form.name.trim(), description: form.description.trim() || null, enabled: form.enabled })
+      const role = await createRole({ name: form.name.trim(), description: form.description.trim() || null, enabled: form.enabled, permissions })
       selectedId.value = role.id
       creating.value = false
+      form.permissions = [...(role.permissions ?? [])]
       notice.value = '角色已创建'
     } else if (selectedId.value) {
-      await updateRole(selectedId.value, { name: form.name.trim(), description: form.description.trim() || null, enabled: form.enabled })
+      const role = await updateRole(selectedId.value, { name: form.name.trim(), description: form.description.trim() || null, enabled: form.enabled, permissions })
+      form.permissions = [...(role.permissions ?? [])]
       notice.value = '角色已更新'
     }
     await refresh()
@@ -109,7 +143,7 @@ async function saveUsers() {
 
 async function toggleEnabled(role: RoleRecord) {
   const action = role.enabled ? '停用' : '启用'
-  if (role.enabled && !window.confirm(`停用“${role.name}”后，该角色不再参与权限判断，历史 ACL 保留。确定停用？`)) return
+  if (role.enabled && !window.confirm(`停用“${role.name}”后，该角色绑定的功能权限会立即失效（成员需刷新后菜单才会更新），历史 ACL 保留。确定停用？`)) return
   try {
     if (role.enabled) await disableRole(role.id)
     else await enableRole(role.id)
@@ -131,7 +165,20 @@ async function loadDocuments() {
   }
 }
 
-onMounted(refresh)
+async function loadPermissionCatalog() {
+  try {
+    const data = await getPermissionCatalog()
+    permissionCategories.value = data.categories
+    permissionItems.value = data.items
+  } catch (reason) {
+    error.value = errorMessage(reason, '无法读取功能权限目录')
+  }
+}
+
+onMounted(() => {
+  void refresh()
+  void loadPermissionCatalog()
+})
 </script>
 
 <template>
@@ -153,13 +200,14 @@ onMounted(refresh)
         <p v-if="loading" class="assistant-hint">正在加载…</p>
         <div v-else class="admin-table-wrap">
           <table class="admin-table">
-            <thead><tr><th>角色名称</th><th>描述</th><th>用户数</th><th>文档数</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
+            <thead><tr><th>角色名称</th><th>描述</th><th>用户数</th><th>文档数</th><th>功能权限</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
             <tbody>
               <tr v-for="role in roles" :key="role.id" :class="{ selected: role.id === selectedId }">
                 <td>{{ role.name }}</td>
                 <td class="role-description" :title="role.description || ''">{{ role.description || '—' }}</td>
                 <td>{{ role.user_count }}</td>
                 <td>{{ role.document_count }}</td>
+                <td>{{ role.permission_count ?? role.permissions?.length ?? 0 }}</td>
                 <td><span :class="role.enabled ? 'is-active' : 'is-stale'">{{ role.enabled ? '启用' : '停用' }}</span></td>
                 <td>{{ new Date(role.created_at).toLocaleDateString('zh-CN') }}</td>
                 <td class="row-actions">
@@ -182,6 +230,25 @@ onMounted(refresh)
           <label class="form-row">角色名称<input v-model="form.name" maxlength="255"></label>
           <label class="form-row">描述<textarea v-model="form.description" rows="2" maxlength="500"></textarea></label>
           <label class="admin-check-row"><input v-model="form.enabled" type="checkbox"><span>启用角色</span></label>
+
+          <div class="permission-editor">
+            <p class="assistant-hint" style="margin:0 0 8px">功能权限（停用角色后这些权限立即失效）</p>
+            <section v-for="group in permissionGroups" :key="group.key" class="permission-group">
+              <header>
+                <strong>{{ group.label }}</strong>
+                <button type="button" class="secondary-action" @click="toggleCategory(group.key)">
+                  {{ categoryFullySelected(group.key) ? '取消全选' : '全选本类' }}
+                </button>
+              </header>
+              <div class="permission-options">
+                <label v-for="item in group.items" :key="item.code" :title="item.description || ''">
+                  <input type="checkbox" :checked="form.permissions.includes(item.code)" @change="togglePermission(item.code)">
+                  <span>{{ item.name }}</span>
+                </label>
+              </div>
+            </section>
+          </div>
+
           <div class="form-actions">
             <button type="button" class="secondary-action" @click="selectedId = ''; creating = false">取消</button>
             <button type="submit" :disabled="saving">{{ saving ? '保存中…' : '保存' }}</button>

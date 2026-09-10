@@ -17,8 +17,18 @@ from app.services.audit import audit_action, record as audit_record
 from app.services.harness import HarnessService
 from app.services.harness_approvals import ApprovalService
 from app.services.permissions import require_admin
+from app.services.rbac import require_permission
 
 router = APIRouter(prefix="/api/harness", tags=["harness"])
+
+HARNESS_USE = "HARNESS_USE"
+
+
+def _require_harness(request: Request):
+    """Harness 安全要求：超级管理员 + HARNESS_USE，二者缺一不可。"""
+    user = require_admin(current_user(request))
+    require_permission(user, HARNESS_USE)
+    return user
 
 
 def _meta(request: Request) -> dict:
@@ -54,27 +64,27 @@ async def _audited_stream(stream, *, user, task_id: uuid.UUID, use_deepseek: boo
 
 @router.get("/status", response_model=HarnessStatusResponse)
 def status(request: Request, settings: Annotated[Settings, Depends(get_settings)]) -> HarnessStatusResponse:
-    require_admin(current_user(request))
+    _require_harness(request)
     client = KubectlClient(settings)
     return HarnessStatusResponse(enabled=bool(settings.allowed_k8s_contexts), kubectl_available=client.available, contexts=settings.allowed_k8s_contexts, max_steps=settings.harness_max_steps, timeout_seconds=settings.harness_timeout_seconds)
 
 
 @router.get("/namespaces", response_model=list[str])
 async def namespaces(request: Request, context: Annotated[str, Query()], settings: Annotated[Settings, Depends(get_settings)]) -> list[str]:
-    require_admin(current_user(request))
+    _require_harness(request)
     result = await KubectlClient(settings).run(context, ["get", "namespaces", "-o", "json"])
     return [item["metadata"]["name"] for item in result.json().get("items", [])]
 
 
 @router.get("/tasks/{task_id}", response_model=HarnessTaskResponse)
 def task(task_id: uuid.UUID, request: Request, session: Annotated[Session, Depends(get_session)], settings: Annotated[Settings, Depends(get_settings)]) -> HarnessTaskResponse:
-    require_admin(current_user(request))
+    _require_harness(request)
     return HarnessTaskResponse.model_validate(HarnessService(session, settings).get_task(task_id))
 
 
 @router.post("/tasks/{task_id}/resume")
 def resume(task_id: uuid.UUID, request: Request, session: Annotated[Session, Depends(get_session)], settings: Annotated[Settings, Depends(get_settings)], use_deepseek: bool = False) -> StreamingResponse:
-    admin = require_admin(current_user(request))
+    admin = _require_harness(request)
     service = HarnessService(session, settings, user=admin)
     stream = _audited_stream(
         service.resume(task_id, use_deepseek), user=admin, task_id=task_id,
@@ -85,7 +95,7 @@ def resume(task_id: uuid.UUID, request: Request, session: Annotated[Session, Dep
 
 @router.post("/approvals/{approval_id}/confirm", response_model=HarnessApprovalResponse)
 async def confirm(approval_id: uuid.UUID, body: ApprovalConfirmRequest, request: Request, session: Annotated[Session, Depends(get_session)], settings: Annotated[Settings, Depends(get_settings)]) -> HarnessApprovalResponse:
-    admin = require_admin(current_user(request))
+    admin = _require_harness(request)
     with audit_action(
         session, "harness_approval_confirmed", user=admin, target_type="harness_approval",
         target_id=approval_id, **_meta(request),
@@ -97,7 +107,7 @@ async def confirm(approval_id: uuid.UUID, body: ApprovalConfirmRequest, request:
 
 @router.post("/approvals/{approval_id}/reject", response_model=HarnessApprovalResponse)
 def reject(approval_id: uuid.UUID, body: ApprovalRejectRequest, request: Request, session: Annotated[Session, Depends(get_session)], settings: Annotated[Settings, Depends(get_settings)]) -> HarnessApprovalResponse:
-    admin = require_admin(current_user(request))
+    admin = _require_harness(request)
     with audit_action(
         session, "harness_approval_rejected", user=admin, target_type="harness_approval",
         target_id=approval_id, detail={"reason": body.reason}, **_meta(request),

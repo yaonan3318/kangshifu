@@ -3,16 +3,15 @@ import { computed, inject, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 import { listChunks } from '../../api/chunks'
 import {
-  ApiError, getDocumentAcl, listDocumentVersions, reprocessDocument, setDocumentAccess,
-  setDocumentExternalPolicy, updateDocument,
+  ApiError, getAclReferences, getDocumentAcl, listDocumentVersions, reprocessDocument,
+  setDocumentAccess, setDocumentExternalPolicy, updateDocument,
 } from '../../api/documents'
-import type { AclEntry, AclItem } from '../../api/documents'
-import { getDepartmentTree, listRoles, listUsers } from '../../api/identity'
-import type { AdminUser, DepartmentNode, RoleRecord } from '../../types/identity'
+import type { AclEntry, AclItem, AclReferences } from '../../api/documents'
 import type { AuthUser } from '../../api/auth'
 import type { DocumentChunk, DocumentRecord } from '../../types/documents'
 import type { KnowledgeBaseRecord } from '../../types/knowledgeBases'
 import { errorMessage } from '../../utils/errors'
+import { hasPermission } from '../../utils/permissions'
 import ChunkEditor from './ChunkEditor.vue'
 
 const props = defineProps<{ document: DocumentRecord; knowledgeBases: KnowledgeBaseRecord[] }>()
@@ -20,6 +19,7 @@ const emit = defineEmits<{ close: []; changed: [] }>()
 
 const currentUser = inject<Ref<AuthUser | null>>('currentUser')
 const isSuper = computed(() => Boolean(currentUser?.value?.is_super_admin))
+const canManage = computed(() => hasPermission('DOCUMENT_MANAGE'))
 
 const chunks = ref<DocumentChunk[]>([])
 const versions = ref<DocumentRecord[]>([])
@@ -41,9 +41,9 @@ const visibility = ref(props.document.visibility)
 const newEntry = ref<{ subject_type: AclEntry['subject_type']; subject_id: string; permission: AclEntry['permission'] }>({
   subject_type: 'DEPARTMENT', subject_id: '', permission: 'READ',
 })
-const departments = ref<DepartmentNode[]>([])
-const roles = ref<RoleRecord[]>([])
-const users = ref<AdminUser[]>([])
+const departments = ref<AclReferences['departments']>([])
+const roles = ref<AclReferences['roles']>([])
+const users = ref<AclReferences['users']>([])
 const sensitivity = ref(props.document.sensitivity_level || 'INTERNAL')
 const externalAllowed = ref(props.document.external_llm_allowed)
 
@@ -60,7 +60,7 @@ const SENSITIVITY_LABELS: Record<string, string> = {
 
 const flatDepartments = computed(() => {
   const out: Array<{ id: string; label: string }> = []
-  const walk = (nodes: DepartmentNode[], depth: number) => {
+  const walk = (nodes: AclReferences['departments'], depth: number) => {
     for (const node of nodes) {
       out.push({ id: node.id, label: `${'　'.repeat(depth)}${node.name}${node.enabled ? '' : '（停用）'}` })
       walk(node.children, depth + 1)
@@ -130,12 +130,10 @@ async function loadAcl() {
 
 async function loadAccessReferences() {
   try {
-    const [tree, roleResult, userResult] = await Promise.all([
-      getDepartmentTree(), listRoles(), listUsers({ page_size: 100 }),
-    ])
-    departments.value = tree
-    roles.value = roleResult.items
-    users.value = userResult.items
+    const references = await getAclReferences()
+    departments.value = references.departments
+    roles.value = references.roles
+    users.value = references.users
   } catch {
     // 引用数据加载失败不阻塞 ACL 读取。
   }
@@ -230,7 +228,7 @@ watch(page, load)
         <button :class="{ active: tab === 'overview' }" @click="tab = 'overview'">基本信息</button>
         <button :class="{ active: tab === 'chunks' }" @click="tab = 'chunks'">片段 {{ total }}</button>
         <button :class="{ active: tab === 'versions' }" @click="tab = 'versions'">版本历史</button>
-        <button :class="{ active: tab === 'access' }" @click="openAccessTab">访问权限</button>
+        <button v-if="canManage" :class="{ active: tab === 'access' }" @click="openAccessTab">访问权限</button>
       </nav>
       <p v-if="error" class="error">{{ error }}</p>
       <p v-if="notice" class="assistant-hint">{{ notice }}</p>
@@ -242,7 +240,7 @@ watch(page, load)
           <div><dt>相对路径</dt><dd>{{ document.relative_path || '—' }}</dd></div>
           <div><dt>检索状态</dt><dd>{{ document.enabled ? '启用' : '停用' }}</dd></div>
         </dl>
-        <div class="governance-form">
+        <div v-if="canManage" class="governance-form">
           <label>知识库<select v-model="targetBase"><option v-for="item in knowledgeBases.filter((x) => x.enabled)" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
           <label>标签<input v-model="tags" placeholder="使用逗号分隔"></label>
           <button @click="saveOverview">保存资料设置</button>
@@ -260,7 +258,7 @@ watch(page, load)
         <ul class="governance-list"><li v-for="item in versions" :key="item.id"><div><strong>v{{ item.version_number }} · {{ item.original_name }}</strong><small>{{ item.status }} · {{ item.enabled ? '启用' : '停用' }}</small></div></li></ul>
       </section>
 
-      <section v-else class="detail-section">
+      <section v-else-if="canManage" class="detail-section">
         <p v-if="aclError" class="error">{{ aclError }}</p>
         <template v-if="aclLoaded">
           <div class="governance-form">

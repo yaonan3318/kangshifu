@@ -1072,3 +1072,12 @@ progress::-webkit-progress-value { background: #3972bf; }
   .department-list-panel .dept-row { align-items: flex-start; flex-wrap: wrap; }
   .department-list-panel .row-actions { width: 100%; margin-left: 0; }
 }
+
+/* 功能级 RBAC：角色功能权限编辑器（自动换行，不使用横向滚动区域） */
+.permission-editor { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; }
+.permission-group { padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
+.permission-group > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.permission-group > header strong { color: #33453a; font-size: 13px; }
+.permission-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 8px 14px; }
+.permission-options label { display: inline-flex; align-items: center; gap: 8px; color: #40516a; font-size: 13px; cursor: pointer; }
+.permission-options input { width: 16px; height: 16px; margin: 0; accent-color: var(--brand); }

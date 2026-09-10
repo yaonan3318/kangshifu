@@ -10,8 +10,12 @@ from app.errors import AppError
 from app.schemas.batches import BatchCreateRequest, BatchDetailResponse, BatchFileResponse, BatchListResponse, BatchResponse
 from app.services.audit import audit_action, record as audit_record
 from app.services.batches import BatchService
+from app.services.rbac import require_permission
 
 router = APIRouter(prefix="/api/batches", tags=["batches"])
+
+DOCUMENT_UPLOAD = "DOCUMENT_UPLOAD"
+DOCUMENT_VIEW = "DOCUMENT_VIEW"
 
 def get_batch_service(session: Annotated[Session, Depends(get_session)], settings: Annotated[Settings, Depends(get_settings)]) -> BatchService:
     return BatchService(session, settings)
@@ -25,6 +29,7 @@ def _meta(request: Request) -> dict:
 
 @router.post("", response_model=BatchResponse, status_code=status.HTTP_201_CREATED)
 def create_batch(body: BatchCreateRequest, request: Request, service: Annotated[BatchService, Depends(get_batch_service)]):
+    require_permission(current_user(request), DOCUMENT_UPLOAD)
     with audit_action(
         service.session, "batch_upload_created", user=current_user(request),
         target_type="batch", detail={"name": body.name}, **_meta(request),
@@ -34,15 +39,18 @@ def create_batch(body: BatchCreateRequest, request: Request, service: Annotated[
     return service.response(batch)
 
 @router.get("", response_model=BatchListResponse)
-def list_batches(service: Annotated[BatchService, Depends(get_batch_service)]):
+def list_batches(request: Request, service: Annotated[BatchService, Depends(get_batch_service)]):
+    require_permission(current_user(request), DOCUMENT_VIEW)
     items = service.list(); return BatchListResponse(items=[service.response(x) for x in items], total=len(items))
 
 @router.get("/{batch_id}", response_model=BatchDetailResponse)
-def get_batch(batch_id: uuid.UUID, service: Annotated[BatchService, Depends(get_batch_service)]):
+def get_batch(batch_id: uuid.UUID, request: Request, service: Annotated[BatchService, Depends(get_batch_service)]):
+    require_permission(current_user(request), DOCUMENT_VIEW)
     return service.response(service.get(batch_id), detail=True)
 
 @router.post("/{batch_id}/files", response_model=BatchFileResponse, status_code=status.HTTP_201_CREATED)
 def upload_batch_file(batch_id: uuid.UUID, relative_path: Annotated[str, Form(max_length=2048)], request: Request, file: Annotated[UploadFile, File()], service: Annotated[BatchService, Depends(get_batch_service)]):
+    require_permission(current_user(request), DOCUMENT_UPLOAD)
     with audit_action(
         service.session, "batch_upload_resumed", user=current_user(request),
         target_type="batch", target_id=batch_id, detail={"relative_path": relative_path}, **_meta(request),
@@ -52,6 +60,7 @@ def upload_batch_file(batch_id: uuid.UUID, relative_path: Annotated[str, Form(ma
 
 @router.post("/{batch_id}/files/{file_id}/retry", response_model=BatchFileResponse)
 def retry_batch_file(batch_id: uuid.UUID, file_id: uuid.UUID, request: Request, service: Annotated[BatchService, Depends(get_batch_service)]):
+    require_permission(current_user(request), DOCUMENT_UPLOAD)
     with audit_action(
         service.session, "batch_upload_resumed", user=current_user(request),
         target_type="batch", target_id=batch_id, detail={"file_id": str(file_id)}, **_meta(request),
@@ -61,6 +70,7 @@ def retry_batch_file(batch_id: uuid.UUID, file_id: uuid.UUID, request: Request, 
 
 @router.post("/{batch_id}/files/{file_id}/ignore", response_model=BatchFileResponse)
 def ignore_batch_file(batch_id: uuid.UUID, file_id: uuid.UUID, request: Request, service: Annotated[BatchService, Depends(get_batch_service)]):
+    require_permission(current_user(request), DOCUMENT_UPLOAD)
     with audit_action(
         service.session, "batch_file_ignored", user=current_user(request),
         target_type="batch", target_id=batch_id, detail={"file_id": str(file_id)}, **_meta(request),
@@ -70,6 +80,7 @@ def ignore_batch_file(batch_id: uuid.UUID, file_id: uuid.UUID, request: Request,
 
 @router.post("/{batch_id}/cancel", response_model=BatchResponse)
 def cancel_batch(batch_id: uuid.UUID, request: Request, service: Annotated[BatchService, Depends(get_batch_service)]):
+    require_permission(current_user(request), DOCUMENT_UPLOAD)
     # 取消属于批次失败事件：成功后仍以 success=False / BATCH_CANCELLED 记录。
     try:
         batch = service.cancel(batch_id)

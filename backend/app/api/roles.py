@@ -12,10 +12,12 @@ from app.db import get_session
 from app.models import Document, DocumentAcl, SubjectType
 from app.schemas.identity import RoleCreateRequest, RoleListResponse, RoleOut, RoleUpdateRequest, RoleUsersRequest
 from app.services import identity
-from app.services.audit import audit_action
-from app.services.permissions import require_admin
+from app.services.audit import audit_action, record as audit_record
+from app.services.rbac import permission_catalog, require_permission
 
 router = APIRouter(prefix="/api/roles", tags=["roles"])
+
+IDENTITY_MANAGE = "IDENTITY_MANAGE"
 
 
 def _request_meta(request: Request) -> dict:
@@ -36,9 +38,20 @@ def list_roles(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
 ) -> RoleListResponse:
-    require_admin(current_user(request))
+    require_permission(current_user(request), IDENTITY_MANAGE)
     items, total = identity.list_roles(session, page=page, page_size=page_size)
     return RoleListResponse(items=[RoleOut(**item) for item in items], page=page, page_size=page_size, total=total)
+
+
+@router.get("/permissions")
+def list_permission_catalog(request: Request) -> dict:
+    """功能权限码目录（按类别），供角色编辑页面渲染勾选项。"""
+    require_permission(current_user(request), IDENTITY_MANAGE)
+    return {"categories": [
+        {"key": "basic", "label": "基础使用"},
+        {"key": "document", "label": "资料管理"},
+        {"key": "operations", "label": "系统运营"},
+    ], "items": [item for item in permission_catalog() if item["category"] != "harness"]}
 
 
 @router.post("", response_model=RoleOut, status_code=201)
@@ -47,13 +60,21 @@ def create_role(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> RoleOut:
-    admin = require_admin(current_user(request))
+    admin = require_permission(current_user(request), IDENTITY_MANAGE)
     with audit_action(
         session, "role_created", user=admin, target_type="role", **_request_meta(request),
     ) as audit:
-        role = identity.create_role(session, name=body.name, description=body.description, enabled=body.enabled)
+        role = identity.create_role(
+            session, name=body.name, description=body.description, enabled=body.enabled,
+            permissions=body.permissions,
+        )
         audit.id = role.id
-        audit.detail = {"name": role.name}
+        audit.detail = {"name": role.name, "permissions": sorted(permission.code for permission in role.permissions)}
+    if body.permissions:
+        audit_record(
+            session, "role_permissions_changed", user=admin, target_type="role", target_id=role.id,
+            detail={"added": sorted(body.permissions), "removed": []}, **_request_meta(request),
+        )
     return _role_out(session, role)
 
 
@@ -63,7 +84,7 @@ def get_role(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> RoleOut:
-    require_admin(current_user(request))
+    require_permission(current_user(request), IDENTITY_MANAGE)
     return _role_out(session, identity.load_role(session, role_id))
 
 
@@ -74,7 +95,7 @@ def update_role(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> RoleOut:
-    admin = require_admin(current_user(request))
+    admin = require_permission(current_user(request), IDENTITY_MANAGE)
     with audit_action(
         session, "role_updated", user=admin, target_type="role", target_id=role_id,
         detail={"fields": sorted(body.model_fields_set)}, **_request_meta(request),
@@ -83,6 +104,13 @@ def update_role(
             session, role_id, name=body.name, description=body.description,
             description_set="description" in body.model_fields_set, enabled=body.enabled,
         )
+    if body.permissions is not None:
+        diff = identity.set_role_permissions(session, role, body.permissions)
+        audit_record(
+            session, "role_permissions_changed", user=admin, target_type="role", target_id=role.id,
+            detail=diff, **_request_meta(request),
+        )
+        role = identity.load_role(session, role_id)
     return _role_out(session, role)
 
 
@@ -92,7 +120,7 @@ def enable_role(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> RoleOut:
-    admin = require_admin(current_user(request))
+    admin = require_permission(current_user(request), IDENTITY_MANAGE)
     with audit_action(
         session, "role_enabled", user=admin, target_type="role", target_id=role_id,
         **_request_meta(request),
@@ -107,7 +135,7 @@ def disable_role(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> RoleOut:
-    admin = require_admin(current_user(request))
+    admin = require_permission(current_user(request), IDENTITY_MANAGE)
     with audit_action(
         session, "role_disabled", user=admin, target_type="role", target_id=role_id,
         **_request_meta(request),
@@ -123,7 +151,7 @@ def set_role_users(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> RoleOut:
-    admin = require_admin(current_user(request))
+    admin = require_permission(current_user(request), IDENTITY_MANAGE)
     with audit_action(
         session, "role_assignment_changed", user=admin, target_type="role", target_id=role_id,
         detail={"user_ids": [str(item) for item in body.user_ids]}, **_request_meta(request),
@@ -138,7 +166,7 @@ def role_documents(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> dict:
-    require_admin(current_user(request))
+    require_permission(current_user(request), IDENTITY_MANAGE)
     identity.load_role(session, role_id)
     rows = session.execute(
         select(Document.id, Document.original_name, Document.visibility, DocumentAcl.permission)

@@ -27,13 +27,18 @@ class P1SecurityRegressionTests(unittest.TestCase):
         rag = source("backend/app/services/rag.py")
         self.assertIn('self.search_service.permission_cache_scope()', rag)
 
-    def test_assistant_mutations_require_admin(self) -> None:
+    def test_assistant_mutations_require_assistant_manage(self) -> None:
         assistants = source("backend/app/api/assistants.py")
-        self.assertGreaterEqual(assistants.count("require_admin(current_user(request))"), 6)
+        self.assertGreaterEqual(
+            assistants.count("require_permission(current_user(request), ASSISTANT_MANAGE)"), 6,
+        )
 
-    def test_every_harness_endpoint_requires_admin(self) -> None:
+    def test_every_harness_endpoint_requires_admin_and_harness_permission(self) -> None:
         harness = source("backend/app/api/harness.py")
-        self.assertGreaterEqual(harness.count("require_admin(current_user(request))"), 6)
+        # 每个端点都经过统一的 super admin + HARNESS_USE 校验。
+        self.assertGreaterEqual(harness.count("_require_harness(request)"), 6)
+        self.assertIn("require_admin(current_user(request))", harness)
+        self.assertIn("require_permission(user, HARNESS_USE)", harness)
 
     def test_regeneration_checks_session_owner(self) -> None:
         chat = source("backend/app/services/chat.py")
@@ -97,11 +102,73 @@ class P1SecurityRegressionTests(unittest.TestCase):
         self.assertIn('"harness_completed"', harness)
         self.assertIn('"harness_failed"', harness)
 
-    def test_admin_denials_are_audited_globally(self) -> None:
+    def test_denials_are_audited_globally(self) -> None:
         main = source("backend/app/main.py")
-        self.assertIn('exc.code in ("ADMIN_REQUIRED", "HARNESS_FORBIDDEN")', main)
+        self.assertIn('"PERMISSION_DENIED"', main)
         self.assertIn('"authorization_denied"', main)
+        self.assertIn('"document_upload_denied"', main)
+        self.assertIn('"knowledge_base_manage_denied"', main)
         self.assertIn('success=False', main)
+
+    # ---- 功能级 RBAC ----
+
+    def test_rbac_service_resolution_rules(self) -> None:
+        rbac = source("backend/app/services/rbac.py")
+        for snippet in (
+            "def effective_permissions",
+            "def has_permission",
+            "def require_permission",
+            "if not role.enabled",
+            "if user.is_super_admin",
+            "codes.discard(HARNESS_USE)",
+            '"PERMISSION_DENIED", "当前账号没有此功能权限", 403',
+        ):
+            self.assertIn(snippet, rbac)
+
+    def test_rbac_migration_is_linear_and_idempotent(self) -> None:
+        migration = source("backend/migrations/versions/0018_function_rbac.py")
+        self.assertIn('revision = "0018_function_rbac"', migration)
+        self.assertIn('down_revision = "0017_assistant_runtime_policy"', migration)
+        self.assertIn("def downgrade()", migration)
+        self.assertIn("ON CONFLICT DO NOTHING", migration)
+        for code in ("ANSWER_USE", "DOCUMENT_MANAGE", "IDENTITY_MANAGE", "HARNESS_USE"):
+            self.assertIn(code, migration)
+
+    def test_rbac_permissions_are_enforced_on_key_endpoints(self) -> None:
+        expectations = {
+            "backend/app/api/answer.py": "ANSWER_USE",
+            "backend/app/api/search.py": "SEARCH_USE",
+            "backend/app/api/documents.py": "DOCUMENT_VIEW",
+            "backend/app/api/batches.py": "DOCUMENT_UPLOAD",
+            "backend/app/api/knowledge_bases.py": "KNOWLEDGE_BASE_MANAGE",
+            "backend/app/api/retrieval_lab.py": "RETRIEVAL_LAB_USE",
+            "backend/app/api/assistants.py": "ASSISTANT_MANAGE",
+            "backend/app/api/users.py": "IDENTITY_MANAGE",
+            "backend/app/api/roles.py": "IDENTITY_MANAGE",
+            "backend/app/api/departments.py": "IDENTITY_MANAGE",
+            "backend/app/api/audit.py": "AUDIT_VIEW",
+            "backend/app/api/stats.py": "STATS_VIEW",
+        }
+        for path, code in expectations.items():
+            self.assertIn(code, source(path))
+
+    def test_stats_service_does_not_override_stats_view_permission(self) -> None:
+        """接口层通过 STATS_VIEW 后，服务层不能再次限定为超级管理员。"""
+        stats_service = source("backend/app/services/stats.py")
+        self.assertNotIn("not user.is_super_admin", stats_service)
+
+    def test_document_acl_remains_independent_of_function_permission(self) -> None:
+        documents = source("backend/app/api/documents.py")
+        self.assertIn("require_permission", documents)
+        # 管理接口仍调用服务层文档级 MANAGE 校验。
+        service = source("backend/app/services/documents.py")
+        self.assertIn("require_manage(self.resolver, document)", service)
+
+    def test_me_returns_permissions_from_enabled_roles(self) -> None:
+        auth_api = source("backend/app/api/auth.py")
+        self.assertIn("effective_permissions(user)", auth_api)
+        schema = source("backend/app/schemas/auth.py")
+        self.assertIn("permissions: list[str]", schema)
 
     def test_feedback_ranking_is_default_off_and_capped(self) -> None:
         config = source("backend/app/config.py")
@@ -136,6 +203,7 @@ class P1SecurityRegressionTests(unittest.TestCase):
             ("0015_feedback_ranking.py", "0015_feedback_ranking", "0014_audit_completion"),
             ("0016_feedback_documents.py", "0016_feedback_documents", "0015_feedback_ranking"),
             ("0017_assistant_runtime_policy.py", "0017_assistant_runtime_policy", "0016_feedback_documents"),
+            ("0018_function_rbac.py", "0018_function_rbac", "0017_assistant_runtime_policy"),
         ):
             content = (versions / filename).read_text(encoding="utf-8")
             self.assertIn(f'revision = "{revision}"', content)

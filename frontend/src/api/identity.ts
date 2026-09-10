@@ -1,7 +1,8 @@
 import { ApiError } from './documents'
 import type { ApiErrorBody } from '../types/documents'
 import type {
-  AdminUser, DepartmentNode, DepartmentRecord, RoleDocument, RoleListResponse, RoleRecord, UserListResponse,
+  AdminUser, DepartmentNode, DepartmentRecord, PermissionCatalog, RoleDocument,
+  RoleListResponse, RoleRecord, UserListResponse,
 } from '../types/identity'
 
 async function parse<T>(response: Response): Promise<T> {
@@ -99,11 +100,15 @@ export async function listRoles(page = 1, pageSize = 100): Promise<RoleListRespo
   return parse(await fetch(`/api/roles?${params}`))
 }
 
-export async function createRole(body: { name: string; description?: string | null; enabled?: boolean }): Promise<RoleRecord> {
+export async function getPermissionCatalog(): Promise<PermissionCatalog> {
+  return parse(await fetch('/api/roles/permissions'))
+}
+
+export async function createRole(body: { name: string; description?: string | null; enabled?: boolean; permissions?: string[] }): Promise<RoleRecord> {
   return parse(await fetch('/api/roles', json('POST', body)))
 }
 
-export async function updateRole(id: string, body: { name?: string; description?: string | null; enabled?: boolean }): Promise<RoleRecord> {
+export async function updateRole(id: string, body: { name?: string; description?: string | null; enabled?: boolean; permissions?: string[] }): Promise<RoleRecord> {
   return parse(await fetch(`/api/roles/${id}`, json('PATCH', body)))
 }
 

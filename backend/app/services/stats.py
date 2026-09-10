@@ -5,7 +5,6 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.errors import AppError
 from app.models import (
     AnswerFeedback, ChatMessage, ChatMessageRole, ChatMessageSource, ChatMessageStatus,
     ChatSession, Document, DocumentStatus, FeedbackRating, ProcessingJob, JobStatus,
@@ -19,8 +18,7 @@ def _cutoff(days: int) -> datetime:
 
 
 def compute_overview(session: Session, user, days: int = 7) -> dict:
-    if user is None or not user.is_super_admin:
-        raise AppError("ADMIN_REQUIRED", "需要管理员权限", 403)
+    """汇总运营指标；调用者身份已由 API 层的 ``STATS_VIEW`` 权限校验。"""
     since = _cutoff(days)
     today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
 

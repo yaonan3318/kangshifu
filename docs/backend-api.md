@@ -10,7 +10,7 @@ FastAPI 根据路由、Pydantic 模型和类型注解自动生成 OpenAPI 文档
 - ReDoc：`http://127.0.0.1:8000/redoc`
 - OpenAPI JSON：`http://127.0.0.1:8000/openapi.json`
 
-Swagger UI 中可以展开接口、点击 **Try it out** 并直接发送请求。当前项目只监听本机地址，没有登录鉴权，不应直接暴露到公网。
+Swagger UI 中可以展开接口、点击 **Try it out** 并直接发送请求。所有 `/api/*`（除登录、健康检查等公开端点）都需要携带登录会话 Cookie；仅监听本机地址，不应直接暴露到公网。当前版本已提供本地账号、功能级 RBAC 与文档 ACL。
 
 ## 统一错误格式
 
@@ -26,7 +26,19 @@ Swagger UI 中可以展开接口、点击 **Try it out** 并直接发送请求�
 }
 ```
 
-常见状态码：`400` 参数或文件无效、`404` 文档不存在、`409` 内容重复或正在处理、`413` 文件超过 200 MB、`415` 文件类型不支持、`422` 请求字段校验失败、`500` 未预期的内部错误。
+常见状态码：`400` 参数或文件无效、`401` 未登录、`403` 无功能权限（`PERMISSION_DENIED`）或无权访问文档、`404` 文档不存在、`409` 内容重复或正在处理、`413` 文件超过 200 MB、`415` 文件类型不支持、`422` 请求字段校验失败、`500` 未预期的内部错误。
+
+功能权限不足时返回 `403`，`code` 为 `PERMISSION_DENIED`，`details.permission` 为缺少的权限码：
+
+```json
+{
+  "error": {
+    "code": "PERMISSION_DENIED",
+    "message": "当前账号没有此功能权限",
+    "details": { "permission": "DOCUMENT_UPLOAD" }
+  }
+}
+```
 
 ## 健康检查
 
@@ -39,6 +51,14 @@ curl http://127.0.0.1:8000/api/health
 ```
 
 返回 `{"status":"ok"}`。这个接口不检查 OCR、Ollama 或 DeepSeek。
+
+## 认证与功能权限
+
+- `POST /api/auth/login`、`POST /api/auth/logout`、`GET /api/auth/me`、`GET /api/health` 为公开端点（`/api/auth/me` 未登录返回 `authenticated=false`）。
+- `GET /api/auth/me` 返回当前用户的 `roles` 与 `permissions`（有效权限码，超级管理员为全部）。
+- 除公开端点外，所有 `/api/*` 需要有效会话 Cookie，否则返回 `401 AUTH_REQUIRED`。
+- 关键接口按功能权限校验，无权限返回 `403 PERMISSION_DENIED`；功能权限与文档 ACL 同时生效。
+- 权限码、默认角色与完整接口映射见 [P1 升级说明](p1-upgrade-guide.md#功能级-rbac0018)。
 
 ## 文档接口
 
@@ -215,7 +235,7 @@ location /api/ {
 }
 ```
 
-生产部署还应增加身份认证、权限隔离、速率限制和审计日志；当前本地版尚未实现这些能力。
+当前本地版已实现本地账号认证、功能级 RBAC、文档 ACL、登录限流与审计日志；生产部署仍应补充 HTTPS、访问控制与更严格的速率限制。
 
 ## P0 知识治理接口
 

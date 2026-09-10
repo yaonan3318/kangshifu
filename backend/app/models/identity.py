@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+from app.models.permission import Permission, role_permissions
 
 
 class SubjectType(str, enum.Enum):
@@ -54,6 +55,10 @@ class Role(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    permissions: Mapped[list[Permission]] = relationship(
+        secondary=role_permissions, order_by="Permission.sort_order",
+    )
 
 
 user_roles = Table(

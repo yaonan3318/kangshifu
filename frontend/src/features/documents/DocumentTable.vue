@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { downloadUrl } from '../../api/documents'
 import type { DocumentRecord } from '../../types/documents'
+import { hasPermission } from '../../utils/permissions'
 
 defineProps<{ documents: DocumentRecord[]; loading: boolean; knowledgeBaseNames: Record<string,string> }>()
 const emit = defineEmits<{ delete: [document: DocumentRecord]; view: [document: DocumentRecord]; toggle: [document: DocumentRecord] }>()
@@ -30,7 +31,7 @@ function formatDate(value: string): string {
           <td class="uppercase">{{ document.extension }}</td>
           <td><span class="status-dot" :class="`status-${document.status.toLowerCase()}`"></span>{{ document.enabled?statusLabels[document.status]:'已停用' }}</td>
           <td>{{ formatDate(document.created_at) }}</td>
-          <td class="row-actions"><button type="button" @click="emit('view', document)">详情</button><button type="button" @click="emit('toggle',document)">{{document.enabled?'停用':'启用'}}</button><a :href="downloadUrl(document.id)">下载</a><button type="button" class="text-danger" @click="emit('delete', document)">移入回收站</button></td>
+          <td class="row-actions"><button type="button" @click="emit('view', document)">详情</button><button v-if="hasPermission('DOCUMENT_MANAGE')" type="button" @click="emit('toggle',document)">{{document.enabled?'停用':'启用'}}</button><a :href="downloadUrl(document.id)">下载</a><button v-if="hasPermission('DOCUMENT_MANAGE')" type="button" class="text-danger" @click="emit('delete', document)">移入回收站</button></td>
         </tr>
       </tbody>
     </table>

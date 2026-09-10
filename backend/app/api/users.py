@@ -13,9 +13,11 @@ from app.schemas.identity import (
 )
 from app.services import identity
 from app.services.audit import audit_action, record as audit_record
-from app.services.permissions import require_admin
+from app.services.rbac import require_permission
 
 router = APIRouter(prefix="/api/users", tags=["users"])
+
+IDENTITY_MANAGE = "IDENTITY_MANAGE"
 
 
 def _request_meta(request: Request) -> dict:
@@ -36,7 +38,7 @@ def list_users(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> UserListResponse:
-    require_admin(current_user(request))
+    require_permission(current_user(request), IDENTITY_MANAGE)
     rows, total = identity.list_users(
         session, search=search, department_id=department_id, role_id=role_id,
         enabled=enabled, page=page, page_size=page_size,
@@ -53,7 +55,7 @@ def create_user(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> UserOut:
-    admin = require_admin(current_user(request))
+    admin = require_permission(current_user(request), IDENTITY_MANAGE)
     with audit_action(
         session, "user_created", user=admin, target_type="user", **_request_meta(request),
     ) as audit:
@@ -73,7 +75,7 @@ def get_user(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> UserOut:
-    require_admin(current_user(request))
+    require_permission(current_user(request), IDENTITY_MANAGE)
     return UserOut(**identity.user_payload(identity.load_user(session, user_id)))
 
 
@@ -84,7 +86,7 @@ def update_user(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> UserOut:
-    admin = require_admin(current_user(request))
+    admin = require_permission(current_user(request), IDENTITY_MANAGE)
     with audit_action(
         session, "user_updated", user=admin, target_type="user", target_id=user_id,
         detail={"fields": sorted(body.model_fields_set)}, **_request_meta(request),
@@ -110,7 +112,7 @@ def enable_user(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> UserOut:
-    admin = require_admin(current_user(request))
+    admin = require_permission(current_user(request), IDENTITY_MANAGE)
     with audit_action(
         session, "user_enabled", user=admin, target_type="user", target_id=user_id,
         **_request_meta(request),
@@ -125,7 +127,7 @@ def disable_user(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> UserOut:
-    admin = require_admin(current_user(request))
+    admin = require_permission(current_user(request), IDENTITY_MANAGE)
     with audit_action(
         session, "user_disabled", user=admin, target_type="user", target_id=user_id,
         **_request_meta(request),
@@ -141,7 +143,7 @@ def reset_password(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> dict:
-    admin = require_admin(current_user(request))
+    admin = require_permission(current_user(request), IDENTITY_MANAGE)
     with audit_action(
         session, "password_reset", user=admin, target_type="user", target_id=user_id,
         **_request_meta(request),

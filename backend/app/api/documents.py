@@ -17,8 +17,13 @@ from app.schemas.documents import DocumentChunkResponse, DocumentContentResponse
 from app.services.audit import audit_action
 from app.services.documents import DocumentService
 from app.services.managed_storage import ManagedStorage
+from app.services.rbac import require_permission
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
+
+DOCUMENT_VIEW = "DOCUMENT_VIEW"
+DOCUMENT_UPLOAD = "DOCUMENT_UPLOAD"
+DOCUMENT_MANAGE = "DOCUMENT_MANAGE"
 
 
 def get_document_service(
@@ -38,6 +43,7 @@ def upload_document(
     knowledge_base_id: Annotated[uuid.UUID | None, Form()] = None,
 ) -> DocumentResponse:
     """上传一个文件；内容重复时返回 409，而不会重复占用磁盘。"""
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_UPLOAD)
     with audit_action(
         service.session, "document_upload", user=getattr(request.state, "auth_user", None),
         target_type="document",
@@ -63,6 +69,7 @@ def document_response(document, service: DocumentService) -> DocumentResponse:
 
 @router.get("", response_model=DocumentListResponse)
 def list_documents(
+    request: Request,
     service: Annotated[DocumentService, Depends(get_document_service)],
     query: Annotated[str | None, Query(max_length=200)] = None,
     extension: Annotated[str | None, Query(max_length=16)] = None,
@@ -74,22 +81,62 @@ def list_documents(
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> DocumentListResponse:
     """分页查询文档元数据，可按文件名、扩展名和处理状态过滤。"""
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_VIEW)
     filters = DocumentFilters(query=query, extension=extension, status=document_status, knowledge_base_id=knowledge_base_id, tag=tag, include_deleted=deleted, page=page, page_size=page_size)
     documents, total = service.list_documents(filters)
     return DocumentListResponse(items=[document_response(item, service) for item in documents], page=page, page_size=page_size, total=total)
 
 
+@router.get("/acl-references")
+def get_acl_references(
+    request: Request,
+    session: Annotated[Session, Depends(get_session)],
+) -> dict:
+    """ACL 编辑所需的部门树/角色/用户引用数据；只要求 DOCUMENT_MANAGE。"""
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_MANAGE)
+    departments = list(session.scalars(select(Department).order_by(Department.name)))
+    payloads = {
+        row.id: {
+            "id": str(row.id), "name": row.name,
+            "parent_id": str(row.parent_id) if row.parent_id else None,
+            "enabled": row.enabled, "children": [],
+        }
+        for row in departments
+    }
+    roots: list[dict] = []
+    for row in departments:
+        node = payloads[row.id]
+        parent = payloads.get(row.parent_id) if row.parent_id else None
+        if parent is not None:
+            parent["children"].append(node)
+        else:
+            roots.append(node)
+    roles = list(session.scalars(select(Role).order_by(Role.name)))
+    users = list(session.scalars(select(User).order_by(User.display_name)))
+    return {
+        "departments": roots,
+        "roles": [{"id": str(row.id), "name": row.name, "enabled": row.enabled} for row in roles],
+        "users": [
+            {"id": str(row.id), "display_name": row.display_name, "username": row.username, "enabled": row.enabled}
+            for row in users
+        ],
+    }
+
+
 @router.get("/{document_id}", response_model=DocumentResponse)
 def get_document(
     document_id: uuid.UUID,
+    request: Request,
     service: Annotated[DocumentService, Depends(get_document_service)],
 ) -> DocumentResponse:
     """取得单个文档的元数据与当前处理状态。"""
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_VIEW)
     return document_response(service.get(document_id), service)
 
 
 @router.patch("/{document_id}", response_model=DocumentResponse)
 def update_document(document_id: uuid.UUID, body: DocumentUpdateRequest, request: Request, service: Annotated[DocumentService, Depends(get_document_service)]):
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_MANAGE)
     with audit_action(
         service.session, "document_updated", user=getattr(request.state, "auth_user", None),
         target_type="document", target_id=document_id,
@@ -103,6 +150,7 @@ def update_document(document_id: uuid.UUID, body: DocumentUpdateRequest, request
 
 @router.post("/{document_id}/enable", response_model=DocumentResponse)
 def enable_document(document_id: uuid.UUID, request: Request, service: Annotated[DocumentService, Depends(get_document_service)]):
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_MANAGE)
     with audit_action(
         service.session, "document_enabled", user=getattr(request.state, "auth_user", None),
         target_type="document", target_id=document_id,
@@ -115,6 +163,7 @@ def enable_document(document_id: uuid.UUID, request: Request, service: Annotated
 
 @router.post("/{document_id}/disable", response_model=DocumentResponse)
 def disable_document(document_id: uuid.UUID, request: Request, service: Annotated[DocumentService, Depends(get_document_service)]):
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_MANAGE)
     with audit_action(
         service.session, "document_disabled", user=getattr(request.state, "auth_user", None),
         target_type="document", target_id=document_id,
@@ -127,6 +176,7 @@ def disable_document(document_id: uuid.UUID, request: Request, service: Annotate
 
 @router.post("/{document_id}/restore", response_model=DocumentResponse)
 def restore_document(document_id: uuid.UUID, request: Request, service: Annotated[DocumentService, Depends(get_document_service)]):
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_MANAGE)
     with audit_action(
         service.session, "document_restore", user=getattr(request.state, "auth_user", None),
         target_type="document", target_id=document_id,
@@ -138,18 +188,21 @@ def restore_document(document_id: uuid.UUID, request: Request, service: Annotate
 
 
 @router.get("/{document_id}/versions", response_model=list[DocumentResponse])
-def document_versions(document_id: uuid.UUID, service: Annotated[DocumentService, Depends(get_document_service)]):
+def document_versions(document_id: uuid.UUID, request: Request, service: Annotated[DocumentService, Depends(get_document_service)]):
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_VIEW)
     return [document_response(item, service) for item in service.versions(document_id)]
 
 
 @router.get("/{document_id}/content", response_model=DocumentContentResponse)
 def get_document_content(
     document_id: uuid.UUID,
+    request: Request,
     service: Annotated[DocumentService, Depends(get_document_service)],
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> DocumentContentResponse:
     """分页读取文档解析后的文本片段，不会再次打开原始附件。"""
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_VIEW)
     chunks, total = service.content(document_id, page, page_size)
     return DocumentContentResponse(
         items=[DocumentChunkResponse.model_validate(chunk) for chunk in chunks],
@@ -165,6 +218,7 @@ def reprocess_document(
     confirm_overwrite: bool = False,
 ) -> DocumentResponse:
     """清除旧片段并重新排队解析，适用于修复 OCR/解析配置后重试。"""
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_MANAGE)
     with audit_action(
         service.session, "document_reprocess", user=getattr(request.state, "auth_user", None),
         target_type="document", target_id=document_id,
@@ -183,6 +237,7 @@ def download_document(
     service: Annotated[DocumentService, Depends(get_document_service)],
 ) -> FileResponse:
     """从受管磁盘目录下载原始附件。"""
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_VIEW)
     with audit_action(
         service.session, "document_download", user=getattr(request.state, "auth_user", None),
         target_type="document", target_id=document_id,
@@ -207,6 +262,7 @@ def delete_document(
     body: DocumentDeleteRequest | None = None,
 ) -> Response:
     """将文档移入回收站；附件和索引继续保留以便恢复。"""
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_MANAGE)
     with audit_action(
         service.session, "document_delete", user=getattr(request.state, "auth_user", None),
         target_type="document", target_id=document_id,
@@ -225,6 +281,7 @@ def purge_document(
     service: Annotated[DocumentService, Depends(get_document_service)],
 ) -> Response:
     """永久删除回收站中的文档及原始附件。"""
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_MANAGE)
     with audit_action(
         service.session, "document_purge", user=getattr(request.state, "auth_user", None),
         target_type="document", target_id=document_id,
@@ -254,6 +311,7 @@ def set_document_access(
     service: Annotated[DocumentService, Depends(get_document_service)],
 ) -> DocumentResponse:
     """设置文档可见级别与 ACL；仅上传人、管理员或 MANAGE 授权者可操作。"""
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_MANAGE)
     visibility = DocumentVisibility(body.visibility) if body.visibility else None
     acl = [entry.model_dump() for entry in body.acl] if body.acl is not None else None
     with audit_action(
@@ -278,6 +336,7 @@ def set_document_external_policy(
     service: Annotated[DocumentService, Depends(get_document_service)],
 ) -> DocumentResponse:
     """设置敏感级别与是否允许发送外部大模型；仅影响 DeepSeek，不影响本地千问。"""
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_MANAGE)
     with audit_action(
         service.session, "document_external_policy_change", user=getattr(request.state, "auth_user", None),
         target_type="document", target_id=document_id,
@@ -297,10 +356,12 @@ def set_document_external_policy(
 @router.get("/{document_id}/acl")
 def get_document_acl(
     document_id: uuid.UUID,
+    request: Request,
     session: Annotated[Session, Depends(get_session)],
     service: Annotated[DocumentService, Depends(get_document_service)],
 ) -> dict:
     """读取文档访问控制条目；必须拥有 MANAGE 权限，且返回可读的对象名称。"""
+    require_permission(getattr(request.state, "auth_user", None), DOCUMENT_MANAGE)
     service.get_managed(document_id)
     rows = session.scalars(select(DocumentAcl).where(DocumentAcl.document_id == document_id)).all()
     names: dict[tuple[str, uuid.UUID], str] = {}

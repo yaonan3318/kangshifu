@@ -25,6 +25,7 @@ Mac 本地公司知识库。当前版本提供安全上传、文档解析、本�
 - 支持人工编辑、停用、恢复和重新索引单个文档片段。
 - 提供检索实验室，展示关键词、语义、RRF、精排和最终上下文，并保存标准问题评测结果。
 - 可选使用本地 `BAAI/bge-reranker-v2-m3` 精排；关闭时不下载、不加载、不占运行内存。
+- 功能级 RBAC（12 个固定权限码 + 四个默认角色）与文档 ACL 双层权限；前端按权限展示菜单，后端逐接口校验。
 
 ## Mac 环境要求
 
@@ -131,7 +132,15 @@ POST   /api/answer/stream
 GET    /api/health
 ```
 
-系统管理接口（仅超级管理员）：
+认证与功能权限接口：
+
+```text
+GET    /api/auth/me            # 返回当前用户角色与有效权限码
+GET    /api/auth/permissions   # 仅返回当前用户有效权限码（刷新菜单用）
+GET    /api/roles/permissions  # 功能权限码目录（需 IDENTITY_MANAGE）
+```
+
+系统管理接口（需 `IDENTITY_MANAGE`，超级管理员自动通过）：
 
 ```text
 GET    /api/users
@@ -158,6 +167,18 @@ GET    /api/documents/{id}/acl
 PUT    /api/documents/{id}/access
 PATCH  /api/documents/{id}/external-policy
 ```
+
+## 功能权限（RBAC）
+
+- 迁移 `0018_function_rbac` 新增 `permissions` / `role_permissions`，并幂等创建四个默认角色：
+  普通员工、资料维护员、知识库管理员、系统管理员。
+- 固定权限码：`ANSWER_USE`、`SEARCH_USE`、`DOCUMENT_VIEW`、`DOCUMENT_UPLOAD`、
+  `DOCUMENT_MANAGE`、`KNOWLEDGE_BASE_MANAGE`、`RETRIEVAL_LAB_USE`、`ASSISTANT_MANAGE`、
+  `IDENTITY_MANAGE`、`AUDIT_VIEW`、`STATS_VIEW`、`HARNESS_USE`。
+- 用户有效权限为所有启用角色权限的并集；超级管理员拥有全部权限；`HARNESS_USE` 仅超级管理员有效。
+- 功能权限不替代文档 ACL：查看/管理资料仍需通过文档级 READ / MANAGE 校验。
+- 无权限返回 403 `PERMISSION_DENIED`，未登录返回 401 `AUTH_REQUIRED`；拒绝事件写入审计。
+- 完整权限码与接口映射、默认角色和 Mac 验收手册见 [P1 升级说明](docs/p1-upgrade-guide.md)。
 
 ## 第四期 RAG 问答配置
 

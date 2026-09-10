@@ -20,6 +20,8 @@ class RoleOut(BaseModel):
     updated_at: datetime
     user_count: int = 0
     document_count: int = 0
+    permissions: list[str] = Field(default_factory=list)
+    permission_count: int = 0
 
 
 class RoleListResponse(BaseModel):
@@ -105,12 +107,14 @@ class RoleCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=500)
     enabled: bool = True
+    permissions: list[str] = Field(default_factory=list, max_length=64)
 
 
 class RoleUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=500)
     enabled: bool | None = None
+    permissions: list[str] | None = Field(default=None, max_length=64)
 
 
 class RoleUsersRequest(BaseModel):

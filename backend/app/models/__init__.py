@@ -5,6 +5,7 @@ from app.models.identity import (
     AclPermission, AuthSession, Department, DocumentAcl, DocumentVisibility,
     Role, SubjectType, User, user_roles,
 )
+from app.models.permission import Permission, role_permissions
 from app.models.audit import AuditLog
 from app.models.document_chunk import DocumentChunk
 from app.models.processing_job import JobStatus, JobType, ProcessingJob
@@ -28,5 +29,5 @@ __all__ = [
     "DEFAULT_ASSISTANT_ID", "Assistant", "assistant_knowledge_bases",
     "AclPermission", "AuthSession", "Department", "DocumentAcl", "DocumentVisibility",
     "Role", "SubjectType", "User", "user_roles", "AuditLog", "AnswerFeedback", "FeedbackRating",
-    "DocumentFeedbackStats", "AnswerFeedbackDocument",
+    "DocumentFeedbackStats", "AnswerFeedbackDocument", "Permission", "role_permissions",
 ]
