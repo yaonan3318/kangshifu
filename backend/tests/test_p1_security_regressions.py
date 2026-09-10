@@ -164,6 +164,21 @@ class P1SecurityRegressionTests(unittest.TestCase):
         self.assertIn('class="role-admin-layout"', role_page)
         self.assertIn('class="role-editor-backdrop"', role_page)
 
+    def test_user_list_uses_full_width_layout_and_drawer(self) -> None:
+        user_page = source("frontend/src/features/admin/UserAdmin.vue")
+        self.assertIn('class="user-admin-layout"', user_page)
+        self.assertIn('class="user-editor-backdrop"', user_page)
+
+    def test_department_tree_uses_full_width_layout_and_drawer(self) -> None:
+        department_page = source("frontend/src/features/admin/DepartmentAdmin.vue")
+        self.assertIn('class="department-admin-layout"', department_page)
+        self.assertIn('class="department-editor-backdrop"', department_page)
+
+    def test_assistant_list_uses_full_width_layout_and_drawer(self) -> None:
+        assistant_page = source("frontend/src/features/assistants/AssistantManager.vue")
+        self.assertIn('class="assistant-admin-layout"', assistant_page)
+        self.assertIn('class="assistant-editor-backdrop"', assistant_page)
+
 
 if __name__ == "__main__":
     unittest.main()

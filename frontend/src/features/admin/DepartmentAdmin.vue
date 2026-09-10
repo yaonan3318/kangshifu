@@ -15,6 +15,7 @@ const notice = ref('')
 const selectedId = ref('')
 const saving = ref(false)
 const creatingRoot = ref(false)
+const editorOpen = ref(false)
 
 const form = reactive({ name: '', parent_id: '', enabled: true })
 
@@ -71,6 +72,7 @@ function selectNode(node: FlatNode) {
   form.name = node.name
   form.parent_id = node.parent_id ?? ''
   form.enabled = node.enabled
+  editorOpen.value = true
 }
 
 function startCreate(parentId = '') {
@@ -79,6 +81,13 @@ function startCreate(parentId = '') {
   form.name = ''
   form.parent_id = parentId
   form.enabled = true
+  editorOpen.value = true
+}
+
+function closeEditor() {
+  editorOpen.value = false
+  selectedId.value = ''
+  creatingRoot.value = false
 }
 
 async function save() {
@@ -95,7 +104,7 @@ async function save() {
       notice.value = '部门已更新'
     }
     await refresh()
-    creatingRoot.value = false
+    closeEditor()
   } catch (reason) {
     error.value = errorMessage(reason, '保存失败')
   } finally {
@@ -139,8 +148,8 @@ onMounted(refresh)
     <p v-if="error" class="error">{{ error }}</p>
     <p v-if="notice" class="assistant-hint">{{ notice }}</p>
 
-    <div class="assistant-grid">
-      <section class="assistant-panel">
+    <div class="department-admin-layout">
+      <section class="assistant-panel department-list-panel">
         <div class="section-heading">
           <div><p class="eyebrow">TREE</p><h2>部门树</h2></div>
           <button type="button" class="primary-action" @click="startCreate('')">＋ 新建根部门</button>
@@ -161,8 +170,12 @@ onMounted(refresh)
         </ul>
       </section>
 
-      <section class="assistant-panel">
-        <div class="section-heading"><div><p class="eyebrow">EDITOR</p><h2>{{ creatingRoot ? '新建部门' : (selected ? '编辑部门' : '部门详情') }}</h2></div></div>
+      <div v-if="editorOpen" class="department-editor-backdrop" @click.self="closeEditor">
+      <section class="assistant-panel department-editor-panel" role="dialog" aria-modal="true" aria-label="部门编辑">
+        <div class="section-heading">
+          <div><p class="eyebrow">EDITOR</p><h2>{{ creatingRoot ? '新建部门' : '编辑部门' }}</h2></div>
+          <button type="button" class="close-button" aria-label="关闭" @click="closeEditor">×</button>
+        </div>
         <form v-if="creatingRoot || selected" class="assistant-form" @submit.prevent="save">
           <label class="form-row">部门名称<input v-model="form.name" maxlength="255"></label>
           <label class="form-row">上级部门
@@ -173,12 +186,12 @@ onMounted(refresh)
           </label>
           <label class="assistant-checkboxes"><input v-model="form.enabled" type="checkbox">启用部门</label>
           <div class="form-actions">
-            <button type="button" class="secondary-action" @click="selectedId = ''; creatingRoot = false">取消</button>
+            <button type="button" class="secondary-action" @click="closeEditor">取消</button>
             <button type="submit" :disabled="saving">{{ saving ? '保存中…' : '保存' }}</button>
           </div>
         </form>
-        <p v-else class="assistant-hint">从左侧选择部门进行编辑，或新建部门。</p>
       </section>
+      </div>
     </div>
   </main>
 </template>

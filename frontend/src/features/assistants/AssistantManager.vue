@@ -13,6 +13,7 @@ const DEFAULT_PROMPT = '你是公司内部知识助手。只能把提供的内�
 const assistants = ref<AssistantRecord[]>([])
 const knowledgeBases = ref<KnowledgeBaseRecord[]>([])
 const selectedId = ref('')
+const editorOpen = ref(false)
 const loading = ref(false)
 const error = ref('')
 const saving = ref(false)
@@ -52,10 +53,8 @@ async function refresh() {
     assistants.value = assistantResult.items
     knowledgeBases.value = kbResult.items
     harnessContexts.value = harnessResult?.contexts ?? []
-    if (!selectedId.value || !assistants.value.some((item) => item.id === selectedId.value)) {
-      selectedId.value = assistants.value[0]?.id ?? ''
-    }
-    if (selected.value) applyToForm(selected.value)
+    if (selectedId.value && !assistants.value.some((item) => item.id === selectedId.value)) selectedId.value = ''
+    if (selected.value && editorOpen.value) applyToForm(selected.value)
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '加载失败'
   } finally {
@@ -89,6 +88,7 @@ function selectAssistant(id: string) {
   selectedId.value = id
   const item = assistants.value.find((entry) => entry.id === id)
   if (item) applyToForm(item)
+  editorOpen.value = true
 }
 
 function newForm() {
@@ -111,6 +111,12 @@ function newForm() {
   form.recommended_questions = ''
   selectedKbIds.value = []
   useAllKnowledgeBases.value = true
+  editorOpen.value = true
+}
+
+function closeEditor() {
+  editorOpen.value = false
+  selectedId.value = ''
 }
 
 function useDefaultPrompt() {
@@ -225,39 +231,42 @@ onMounted(refresh)
     </header>
     <p v-if="error" class="error">{{ error }}</p>
 
-    <div class="assistant-grid">
-      <section class="assistant-panel">
+    <div class="assistant-admin-layout">
+      <section class="assistant-panel assistant-list-panel">
         <div class="section-heading">
           <div><p class="eyebrow">ASSISTANTS</p><h2>助手列表</h2></div>
           <button type="button" class="primary-action" @click="newForm">＋ 新建助手</button>
         </div>
         <p v-if="loading" class="assistant-hint">正在加载…</p>
-        <ul v-else class="assistant-list">
-          <li v-for="item in assistants" :key="item.id" :class="{ selected: item.id === selectedId }">
-            <header>
-              <span class="mini-avatar">{{ item.avatar || '康' }}</span>
-              <div style="min-width:0">
-                <strong>{{ item.name }}</strong>
-                <small v-if="item.description">{{ item.description }}</small>
-                <small v-else style="display:block">暂无说明</small>
-              </div>
-            </header>
-            <small>
-              模型：{{ item.model_name || '默认' }} ·
-              {{ item.knowledge_base_ids.length === 0 ? '全部知识库' : `${item.knowledge_base_ids.length} 个知识库` }} ·
-              {{ item.enabled ? '已启用' : '已停用' }}
-            </small>
-            <div class="row-actions">
-              <button type="button" @click="selectAssistant(item.id)">编辑</button>
-              <button type="button" @click="toggle(item)">{{ item.enabled ? '停用' : '启用' }}</button>
-              <button v-if="item.id !== assistants[0]?.id" type="button" class="text-danger" @click="remove(item)">删除</button>
-            </div>
-          </li>
-        </ul>
+        <div v-else class="admin-table-wrap">
+          <table class="admin-table">
+            <thead><tr><th>助手</th><th>职责说明</th><th>模型</th><th>知识库范围</th><th>DeepSeek</th><th>Harness</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr v-for="item in assistants" :key="item.id" :class="{ selected: item.id === selectedId }">
+                <td><span class="assistant-table-name"><span class="mini-avatar">{{ item.avatar || '康' }}</span><strong>{{ item.name }}</strong></span></td>
+                <td class="assistant-description" :title="item.description || ''">{{ item.description || '暂无说明' }}</td>
+                <td>{{ item.model_name || '默认' }}</td>
+                <td>{{ item.knowledge_base_ids.length === 0 ? '全部知识库' : `${item.knowledge_base_ids.length} 个知识库` }}</td>
+                <td>{{ item.deepseek_enabled ? '开启' : '关闭' }}</td>
+                <td>{{ item.harness_enabled ? '开启' : '关闭' }}</td>
+                <td><span :class="item.enabled ? 'is-active' : 'is-stale'">{{ item.enabled ? '启用' : '停用' }}</span></td>
+                <td class="row-actions">
+                  <button type="button" @click="selectAssistant(item.id)">编辑</button>
+                  <button type="button" @click="toggle(item)">{{ item.enabled ? '停用' : '启用' }}</button>
+                  <button v-if="item.id !== assistants[0]?.id" type="button" class="text-danger" @click="remove(item)">删除</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
-      <section class="assistant-panel">
-        <div class="section-heading"><div><p class="eyebrow">EDITOR</p><h2>{{ selectedId ? '编辑助手' : '新建助手' }}</h2></div></div>
+      <div v-if="editorOpen" class="assistant-editor-backdrop" @click.self="closeEditor">
+      <section class="assistant-panel assistant-editor-panel" role="dialog" aria-modal="true" aria-label="助手编辑">
+        <div class="section-heading">
+          <div><p class="eyebrow">EDITOR</p><h2>{{ selectedId ? '编辑助手' : '新建助手' }}</h2></div>
+          <button type="button" class="close-button" aria-label="关闭" @click="closeEditor">×</button>
+        </div>
         <form class="assistant-form" @submit.prevent="save">
           <div class="two-col">
             <label class="form-row">名称<input v-model="form.name" type="text" maxlength="255" placeholder="例如：技术资料助手"></label>
@@ -325,6 +334,7 @@ onMounted(refresh)
           </div>
         </form>
       </section>
+      </div>
     </div>
   </main>
 </template>

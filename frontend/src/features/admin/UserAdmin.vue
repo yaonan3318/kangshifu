@@ -23,6 +23,7 @@ const filters = reactive<{ search: string; department_id: string; role_id: strin
 
 const selectedId = ref('')
 const editing = ref(false)
+const editorOpen = ref(false)
 const saving = ref(false)
 const passwordTarget = ref<AdminUser | null>(null)
 const newPassword = ref('')
@@ -92,6 +93,19 @@ function resetForm() {
   form.enabled = true
 }
 
+function startCreate() {
+  resetForm()
+  passwordTarget.value = null
+  editorOpen.value = true
+}
+
+function closeEditor() {
+  editorOpen.value = false
+  passwordTarget.value = null
+  newPassword.value = ''
+  resetForm()
+}
+
 function selectUser(user: AdminUser) {
   selectedId.value = user.id
   editing.value = true
@@ -102,6 +116,8 @@ function selectUser(user: AdminUser) {
   form.role_ids = user.roles.map((role) => role.id)
   form.is_super_admin = user.is_super_admin
   form.enabled = user.enabled
+  passwordTarget.value = null
+  editorOpen.value = true
 }
 
 function toggleRole(id: string) {
@@ -138,8 +154,8 @@ async function save() {
       })
       notice.value = '用户已创建'
     }
-    resetForm()
     await refresh()
+    closeEditor()
   } catch (reason) {
     error.value = errorMessage(reason, '保存失败')
   } finally {
@@ -161,6 +177,7 @@ async function toggleEnabled(user: AdminUser) {
 }
 
 function startResetPassword(user: AdminUser) {
+  selectUser(user)
   passwordTarget.value = user
   newPassword.value = ''
   error.value = ''
@@ -201,11 +218,11 @@ onMounted(async () => {
     <p v-if="error" class="error">{{ error }}</p>
     <p v-if="notice" class="assistant-hint">{{ notice }}</p>
 
-    <div class="assistant-grid">
-      <section class="assistant-panel">
+    <div class="user-admin-layout">
+      <section class="assistant-panel user-list-panel">
         <div class="section-heading">
           <div><p class="eyebrow">USERS</p><h2>用户列表 <span>{{ total }}</span></h2></div>
-          <button type="button" class="primary-action" @click="resetForm">＋ 新建用户</button>
+          <button type="button" class="primary-action" @click="startCreate">＋ 新建用户</button>
         </div>
         <div class="filter-row">
           <input v-model="filters.search" placeholder="用户名/显示名称" @keyup.enter="page = 1; refresh()">
@@ -254,8 +271,12 @@ onMounted(async () => {
         </nav>
       </section>
 
-      <section class="assistant-panel">
-        <div class="section-heading"><div><p class="eyebrow">EDITOR</p><h2>{{ editing ? '编辑用户' : '新建用户' }}</h2></div></div>
+      <div v-if="editorOpen" class="user-editor-backdrop" @click.self="closeEditor">
+      <section class="assistant-panel user-editor-panel" role="dialog" aria-modal="true" aria-label="用户编辑">
+        <div class="section-heading">
+          <div><p class="eyebrow">EDITOR</p><h2>{{ editing ? '编辑用户' : '新建用户' }}</h2></div>
+          <button type="button" class="close-button" aria-label="关闭" @click="closeEditor">×</button>
+        </div>
         <form class="assistant-form" @submit.prevent="save">
           <div class="two-col">
             <label class="form-row">用户名<input v-model="form.username" :disabled="editing" maxlength="255" placeholder="登录名（创建后不可修改）"></label>
@@ -282,7 +303,7 @@ onMounted(async () => {
             <label><input v-model="form.enabled" type="checkbox">启用账号</label>
           </div>
           <div class="form-actions">
-            <button type="button" class="secondary-action" @click="resetForm">重置</button>
+            <button type="button" class="secondary-action" @click="closeEditor">取消</button>
             <button type="submit" :disabled="saving">{{ saving ? '保存中…' : (editing ? '保存修改' : '创建用户') }}</button>
           </div>
         </form>
@@ -296,6 +317,7 @@ onMounted(async () => {
           </div>
         </div>
       </section>
+      </div>
     </div>
   </main>
 </template>

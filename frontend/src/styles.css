@@ -975,9 +975,15 @@ progress::-webkit-progress-value { background: #3972bf; }
 .harness-policy-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; border-left: 3px solid var(--brand); border-radius: 8px; background: #edf4ff; }
 .harness-policy-grid .answer-notice { grid-column: 1 / -1; margin: 0; }
 
-/* 角色列表占满内容区；编辑器按需从右侧出现。 */
-.role-admin-layout { width: 100%; }
-.role-list-panel { width: 100%; padding: 22px; }
+/* 管理列表占满内容区；新增和编辑按需从右侧抽屉出现。 */
+.role-admin-layout,
+.user-admin-layout,
+.department-admin-layout,
+.assistant-admin-layout { width: 100%; }
+.role-list-panel,
+.user-list-panel,
+.department-list-panel,
+.assistant-list-panel { width: 100%; padding: 22px; }
 .role-list-panel .admin-table-wrap { width: 100%; overflow-x: visible; }
 .role-list-panel .admin-table { table-layout: fixed; }
 .role-list-panel .admin-table th:nth-child(1) { width: 15%; }
@@ -989,17 +995,78 @@ progress::-webkit-progress-value { background: #3972bf; }
 .role-list-panel .admin-table th:nth-child(7) { width: 14%; }
 .role-list-panel .admin-table td { overflow: hidden; text-overflow: ellipsis; }
 .role-description { white-space: normal !important; line-height: 1.55; }
-.role-editor-backdrop { position: fixed; z-index: 80; inset: 64px 0 0; display: flex; justify-content: flex-end; background: rgba(20,35,56,.28); backdrop-filter: blur(2px); }
-.role-editor-panel { width: min(620px, 100%); height: 100%; overflow-y: auto; padding: 26px; border: 0; border-left: 1px solid var(--line); border-radius: 0; box-shadow: -18px 0 48px rgba(24,48,79,.14); }
-.role-editor-panel .close-button { padding: 0 5px; color: #5b6879; font-size: 28px; line-height: 1; }
+.role-editor-backdrop,
+.user-editor-backdrop,
+.department-editor-backdrop,
+.assistant-editor-backdrop { position: fixed; z-index: 80; inset: 64px 0 0; display: flex; justify-content: flex-end; background: rgba(20,35,56,.28); backdrop-filter: blur(2px); }
+.role-editor-panel,
+.user-editor-panel,
+.department-editor-panel,
+.assistant-editor-panel { width: min(680px, 100%); height: 100%; overflow-y: auto; padding: 26px; border: 0; border-left: 1px solid var(--line); border-radius: 0; box-shadow: -18px 0 48px rgba(24,48,79,.14); }
+.role-editor-panel .close-button,
+.user-editor-panel .close-button,
+.department-editor-panel .close-button,
+.assistant-editor-panel .close-button { padding: 0 5px; color: #5b6879; font-size: 28px; line-height: 1; }
 .role-editor-panel .assistant-checkboxes { max-height: 240px; overflow-y: auto; padding-right: 4px; }
 
+.user-list-panel .filter-row { display: grid; grid-template-columns: minmax(180px, 1.4fr) repeat(3, minmax(125px, .8fr)) auto; }
+.user-list-panel .filter-row > * { width: 100%; }
+.user-list-panel .admin-table-wrap,
+.assistant-list-panel .admin-table-wrap { width: 100%; overflow-x: visible; }
+.user-list-panel .admin-table,
+.assistant-list-panel .admin-table { table-layout: fixed; }
+.user-list-panel .admin-table th:nth-child(1) { width: 10%; }
+.user-list-panel .admin-table th:nth-child(2) { width: 11%; }
+.user-list-panel .admin-table th:nth-child(3) { width: 10%; }
+.user-list-panel .admin-table th:nth-child(4) { width: 14%; }
+.user-list-panel .admin-table th:nth-child(5),
+.user-list-panel .admin-table th:nth-child(6) { width: 6%; }
+.user-list-panel .admin-table th:nth-child(7) { width: 14%; }
+.user-list-panel .admin-table th:nth-child(8) { width: 11%; }
+.user-list-panel .admin-table th:nth-child(9) { width: 18%; }
+.user-list-panel .admin-table td { white-space: normal; overflow-wrap: anywhere; }
+.user-list-panel .admin-table .row-actions { white-space: nowrap; }
+
+.department-list-panel .dept-tree { gap: 8px; }
+.department-list-panel .dept-row { min-height: 52px; padding-block: 10px; border-color: var(--line); }
+.department-list-panel .dept-row:hover { border-color: #b7cae5; background: #f8fafd; }
+.department-list-panel .dept-name { font-size: 14px; }
+.department-list-panel .row-actions { margin-left: auto; }
+
+.assistant-list-panel .admin-table th:nth-child(1) { width: 15%; }
+.assistant-list-panel .admin-table th:nth-child(2) { width: 22%; }
+.assistant-list-panel .admin-table th:nth-child(3) { width: 10%; }
+.assistant-list-panel .admin-table th:nth-child(4) { width: 12%; }
+.assistant-list-panel .admin-table th:nth-child(5),
+.assistant-list-panel .admin-table th:nth-child(6),
+.assistant-list-panel .admin-table th:nth-child(7) { width: 8%; }
+.assistant-list-panel .admin-table th:nth-child(8) { width: 17%; }
+.assistant-list-panel .admin-table td { white-space: normal; overflow-wrap: anywhere; vertical-align: middle; }
+.assistant-table-name { display: flex; align-items: center; gap: 9px; }
+.assistant-table-name .mini-avatar { display: grid; flex: 0 0 auto; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(145deg, #2d68bd, #1b477f); color: #fff; font-weight: 700; }
+.assistant-description { color: var(--muted); line-height: 1.55; }
+.assistant-editor-panel { width: min(760px, 100%); }
+
 @media (max-width: 900px) {
-  .role-list-panel .admin-table-wrap { overflow-x: auto; }
-  .role-list-panel .admin-table { min-width: 820px; table-layout: auto; }
+  .role-list-panel .admin-table-wrap,
+  .user-list-panel .admin-table-wrap,
+  .assistant-list-panel .admin-table-wrap { overflow-x: auto; }
+  .role-list-panel .admin-table,
+  .user-list-panel .admin-table,
+  .assistant-list-panel .admin-table { min-width: 820px; table-layout: auto; }
+  .user-list-panel .filter-row { grid-template-columns: 1fr 1fr; }
   .harness-policy-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
-  .role-editor-backdrop { inset-block-start: 58px; }
-  .role-editor-panel { padding: 20px 16px; }
+  .role-editor-backdrop,
+  .user-editor-backdrop,
+  .department-editor-backdrop,
+  .assistant-editor-backdrop { inset-block-start: 58px; }
+  .role-editor-panel,
+  .user-editor-panel,
+  .department-editor-panel,
+  .assistant-editor-panel { padding: 20px 16px; }
+  .user-list-panel .filter-row { grid-template-columns: 1fr; }
+  .department-list-panel .dept-row { align-items: flex-start; flex-wrap: wrap; }
+  .department-list-panel .row-actions { width: 100%; margin-left: 0; }
 }
