@@ -34,6 +34,11 @@ class Assistant(Base):
     model_name: Mapped[str | None] = mapped_column(String(255))
     use_deepseek_allowed: Mapped[bool] = mapped_column(Boolean, default=True)
     default_deepseek_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 运行策略由管理员在助手配置中确定，问答用户不能按请求覆盖。
+    deepseek_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    harness_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    harness_context: Mapped[str | None] = mapped_column(String(255))
+    harness_namespace: Mapped[str] = mapped_column(String(255), default="default")
     retrieval_limit: Mapped[int] = mapped_column(Integer, default=6)
     temperature: Mapped[float] = mapped_column(Float, default=0.2)
     recommended_questions: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))

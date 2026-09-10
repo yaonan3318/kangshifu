@@ -144,8 +144,8 @@ onMounted(refresh)
     <p v-if="error" class="error">{{ error }}</p>
     <p v-if="notice" class="assistant-hint">{{ notice }}</p>
 
-    <div class="assistant-grid">
-      <section class="assistant-panel">
+    <div class="role-admin-layout">
+      <section class="assistant-panel role-list-panel">
         <div class="section-heading">
           <div><p class="eyebrow">ROLES</p><h2>角色列表</h2></div>
           <button type="button" class="primary-action" @click="startCreate">＋ 新建角色</button>
@@ -157,7 +157,7 @@ onMounted(refresh)
             <tbody>
               <tr v-for="role in roles" :key="role.id" :class="{ selected: role.id === selectedId }">
                 <td>{{ role.name }}</td>
-                <td>{{ role.description || '—' }}</td>
+                <td class="role-description" :title="role.description || ''">{{ role.description || '—' }}</td>
                 <td>{{ role.user_count }}</td>
                 <td>{{ role.document_count }}</td>
                 <td><span :class="role.enabled ? 'is-active' : 'is-stale'">{{ role.enabled ? '启用' : '停用' }}</span></td>
@@ -172,8 +172,12 @@ onMounted(refresh)
         </div>
       </section>
 
-      <section class="assistant-panel">
-        <div class="section-heading"><div><p class="eyebrow">EDITOR</p><h2>{{ creating ? '新建角色' : (selectedId ? '编辑角色' : '角色详情') }}</h2></div></div>
+      <div v-if="creating || selectedId" class="role-editor-backdrop" @click.self="selectedId = ''; creating = false">
+      <section class="assistant-panel role-editor-panel" role="dialog" aria-modal="true" aria-label="角色编辑">
+        <div class="section-heading">
+          <div><p class="eyebrow">EDITOR</p><h2>{{ creating ? '新建角色' : '编辑角色' }}</h2></div>
+          <button type="button" class="close-button" aria-label="关闭" @click="selectedId = ''; creating = false">×</button>
+        </div>
         <form v-if="creating || selectedId" class="assistant-form" @submit.prevent="save">
           <label class="form-row">角色名称<input v-model="form.name" maxlength="255"></label>
           <label class="form-row">描述<textarea v-model="form.description" rows="2" maxlength="500"></textarea></label>
@@ -208,6 +212,7 @@ onMounted(refresh)
           </ul>
         </div>
       </section>
+      </div>
     </div>
   </main>
 </template>

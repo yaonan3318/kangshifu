@@ -16,6 +16,7 @@ from app.config import Settings, get_settings
 from app.db import get_session
 from app.errors import AppError
 from app.models.chat import ChatProvider
+from app.models.assistant import Assistant
 from app.schemas.answer import AnswerEvent, AnswerRequest, AnswerStatusResponse
 from app.services.chat import AnswerRecorder, ChatService
 from app.services.audit import record as audit_record
@@ -46,6 +47,26 @@ def _provider_value(event: AnswerEvent) -> ChatProvider:
     return ChatProvider(str(event.provider.value))
 
 
+def apply_assistant_runtime_policy(
+    session: Session, body: AnswerRequest, chat_user: object | None,
+) -> AnswerRequest:
+    """用服务端助手配置覆盖客户端能力开关，避免用户绕过管理员策略。"""
+    assistant = session.get(Assistant, body.assistant_id) if body.assistant_id else None
+    available = assistant is not None and assistant.enabled
+    harness_enabled = bool(
+        available and assistant.harness_enabled
+        and assistant.harness_context
+        and getattr(chat_user, "is_super_admin", False)
+    )
+    return body.model_copy(update={
+        "use_deepseek": bool(available and assistant.deepseek_enabled),
+        "use_harness": harness_enabled,
+        "k8s_context": assistant.harness_context if harness_enabled else None,
+        "k8s_namespace": assistant.harness_namespace if harness_enabled else None,
+        "deployment_yaml": None,
+    })
+
+
 @router.get("/status", response_model=AnswerStatusResponse)
 async def answer_status(service: Annotated[RagService, Depends(get_rag_service)]) -> AnswerStatusResponse:
     """检查本地 Ollama 模型是否就绪以及 DeepSeek 是否已配置。"""
@@ -72,6 +93,7 @@ async def answer_stream(
     """
     # 提前校验会话存在（归档会话也可继续提问），避免进入流式阶段后才发现 404。
     chat_user = getattr(request.state, "auth_user", None)
+    body = apply_assistant_runtime_policy(session, body, chat_user)
     # Harness 可执行运维工具，权限闭环前仅限管理员使用，避免绕过文档权限。
     if body.use_harness and (chat_user is None or not chat_user.is_super_admin):
         raise AppError("HARNESS_FORBIDDEN", "Harness 功能仅限管理员使用", 403)
@@ -211,4 +233,3 @@ async def answer_stream(
             "X-Chat-Message-Id": str(recorder.assistant.id) if recorder.assistant else "",
         },
     )
-

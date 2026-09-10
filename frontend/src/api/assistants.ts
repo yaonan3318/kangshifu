@@ -26,6 +26,10 @@ export interface AssistantUpsertInput {
   model_name?: string | null
   use_deepseek_allowed?: boolean
   default_deepseek_enabled?: boolean
+  deepseek_enabled?: boolean
+  harness_enabled?: boolean
+  harness_context?: string | null
+  harness_namespace?: string
   retrieval_limit?: number
   temperature?: number
   recommended_questions?: string[]

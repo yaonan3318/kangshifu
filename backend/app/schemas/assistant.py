@@ -17,6 +17,10 @@ class AssistantOut(BaseModel):
     model_name: str | None
     use_deepseek_allowed: bool
     default_deepseek_enabled: bool
+    deepseek_enabled: bool
+    harness_enabled: bool
+    harness_context: str | None
+    harness_namespace: str
     retrieval_limit: int
     temperature: float
     recommended_questions: list[str] = Field(default_factory=list)
@@ -36,6 +40,10 @@ class AssistantUpsert(BaseModel):
     model_name: str | None = Field(default=None, max_length=255)
     use_deepseek_allowed: bool | None = None
     default_deepseek_enabled: bool | None = None
+    deepseek_enabled: bool | None = None
+    harness_enabled: bool | None = None
+    harness_context: str | None = Field(default=None, max_length=255)
+    harness_namespace: str | None = Field(default=None, min_length=1, max_length=255)
     retrieval_limit: int | None = Field(default=None, ge=1, le=20)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     recommended_questions: list[str] | None = Field(default=None, max_length=20)

@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import type { Ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ApiError } from '../../api/documents'
 import { getAnswerStatus, streamAnswer, warmUpAnswer } from '../../api/answer'
 import type { AnswerEvent, AnswerMetrics, AnswerSource, AnswerStatus, AnswerTurn, CitationSource } from '../../types/answer'
@@ -9,8 +8,7 @@ import type { KnowledgeBaseRecord } from '../../types/knowledgeBases'
 import { listAssistants } from '../../api/assistants'
 import type { AssistantRecord } from '../../types/assistant'
 import { submitFeedback } from '../../api/feedback'
-import { getHarnessStatus, getNamespaces, confirmApproval, getHarnessTask, rejectApproval, resumeHarness } from '../../api/harness'
-import type { HarnessStatus } from '../../types/harness'
+import { confirmApproval, getHarnessTask, rejectApproval, resumeHarness } from '../../api/harness'
 import { archiveChatSession, createChatSession, deleteChatSession, getChatSession, listChatSessions, renameChatSession, restoreChatSession } from '../../api/chat'
 import type { ChatMessageRecord, ChatSessionDetail, ChatSessionItem } from '../../types/chat'
 import type { HarnessApproval } from '../../types/answer'
@@ -19,24 +17,12 @@ import SessionSidebar from './SessionSidebar.vue'
 import ReferenceDrawer from './ReferenceDrawer.vue'
 import HarnessTimeline from './HarnessTimeline.vue'
 import HarnessApprovalCard from './HarnessApproval.vue'
-import type { AuthUser } from '../../api/auth'
 
 const ACTIVE_SESSION_KEY = 'company-search-active-session'
 const DRAFT_KEY = 'company-search-draft'
-const currentUser = inject<Ref<AuthUser | null>>('currentUser', ref(null))
-const isAdmin = computed(() => Boolean(currentUser.value?.is_super_admin))
-
 const question = ref('')
-const useDeepseek = ref(false)
-const useHarness = ref(false)
-const harnessStatus = ref<HarnessStatus | null>(null)
-const selectedContext = ref('')
-const selectedNamespace = ref('default')
-const namespaces = ref<string[]>([])
 const approvalBusy = ref(false)
-const deploymentYaml = ref('')
 const advancedOpen = ref(false)
-const showHarnessAdvanced = computed(() => isAdmin.value && (useHarness.value || advancedOpen.value))
 const status = ref<AnswerStatus | null>(null)
 const statusError = ref('')
 const knowledgeBases = ref<KnowledgeBaseRecord[]>([])
@@ -97,13 +83,6 @@ const stageLabels: Record<string, string> = {
 async function loadStatus() {
   try {
     status.value = await getAnswerStatus()
-    if (isAdmin.value) {
-      harnessStatus.value = await getHarnessStatus()
-      if (!selectedContext.value && harnessStatus.value.contexts.length) selectedContext.value = harnessStatus.value.contexts[0]
-    } else {
-      useHarness.value = false
-      harnessStatus.value = null
-    }
     statusError.value = ''
     if (ollamaReady.value && !warmed.value) {
       warmed.value = true
@@ -446,11 +425,10 @@ async function ask(suggested?: string) {
       sessionId,
       assistantId: currentAssistantId.value || undefined,
       knowledgeBaseId: knowledgeBaseId.value || undefined,
-      useDeepseek: useDeepseek.value,
-      useHarness: useHarness.value,
-      k8sContext: selectedContext.value,
-      k8sNamespace: selectedNamespace.value,
-      deploymentYaml: deploymentYaml.value,
+      useDeepseek: currentAssistant.value?.deepseek_enabled ?? false,
+      useHarness: currentAssistant.value?.harness_enabled ?? false,
+      k8sContext: currentAssistant.value?.harness_context ?? undefined,
+      k8sNamespace: currentAssistant.value?.harness_namespace ?? undefined,
       history,
     }, controller.signal, (event) => {
       handleAnswerEvent(turn, event)
@@ -514,11 +492,10 @@ async function regenerate(turn: AnswerTurn) {
       assistantId: currentAssistantId.value || undefined,
       regenerateMessageId: assistantMessageId,
       knowledgeBaseId: knowledgeBaseId.value || undefined,
-      useDeepseek: useDeepseek.value,
-      useHarness: useHarness.value,
-      k8sContext: selectedContext.value,
-      k8sNamespace: selectedNamespace.value,
-      deploymentYaml: deploymentYaml.value,
+      useDeepseek: currentAssistant.value?.deepseek_enabled ?? false,
+      useHarness: currentAssistant.value?.harness_enabled ?? false,
+      k8sContext: currentAssistant.value?.harness_context ?? undefined,
+      k8sNamespace: currentAssistant.value?.harness_namespace ?? undefined,
       history,
     }, controller.signal, (event) => {
       handleAnswerEvent(turn, event)
@@ -598,7 +575,7 @@ async function decideApproval(turn: AnswerTurn, confirmation: string | null) {
     turn.approval = null
     window.localStorage.removeItem('company-search-pending-harness-task')
     turn.generating = true
-    await resumeHarness(turn.harnessTaskId, useDeepseek.value, (event) => {
+    await resumeHarness(turn.harnessTaskId, currentAssistant.value?.deepseek_enabled ?? false, (event) => {
       handleHarnessEvent(turn, event)
       if (event.type === 'delta') { turn.answer += event.text ?? ''; if (event.provider) turn.provider = event.provider }
       if (event.type === 'replace') { turn.answer = ''; turn.provider = event.provider ?? 'DEEPSEEK' }
@@ -734,17 +711,6 @@ function saveDraft() {
 watch([sessionSearch, showArchived], () => {
   window.clearTimeout(searchTimer)
   searchTimer = window.setTimeout(refreshSessions, 250)
-})
-
-watch(selectedContext, async (context) => {
-  namespaces.value = []
-  if (!context) return
-  try {
-    namespaces.value = await getNamespaces(context)
-    if (!namespaces.value.includes(selectedNamespace.value)) selectedNamespace.value = namespaces.value[0] || 'default'
-  } catch {
-    // 读取失败不阻断提问
-  }
 })
 
 const DOWN_REASONS = ['答非所问', '内容不准确', '引用不正确', '资料已经过期', '回答不完整', '没有找到已有资料', '回答速度太慢']
@@ -987,20 +953,7 @@ onBeforeUnmount(() => {
           <summary>高级设置</summary>
           <div class="qa-advanced-body">
             <label class="qa-field"><span>知识库范围</span><select v-model="knowledgeBaseId"><option value="">全部知识库</option><option v-for="item in enabledBases" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
-            <label class="deepseek-toggle"><input v-model="useDeepseek" type="checkbox"><span></span><b>使用 DeepSeek 增强</b></label>
-            <label v-if="isAdmin" class="deepseek-toggle"><input v-model="useHarness" type="checkbox"><span></span><b>使用 Harness</b></label>
           </div>
-          <div v-if="showHarnessAdvanced" class="harness-environment">
-            <label>Context<select v-model="selectedContext"><option value="" disabled>选择 Kubernetes context</option><option v-for="item in harnessStatus?.contexts || []" :key="item" :value="item">{{ item }}</option></select></label>
-            <label>Namespace<select v-model="selectedNamespace"><option v-for="item in namespaces" :key="item" :value="item">{{ item }}</option></select></label>
-            <small v-if="useHarness && !harnessStatus?.kubectl_available">未找到 kubectl，Harness 无法运行。</small>
-            <small v-else-if="useHarness && !harnessStatus?.enabled">请先在 backend/.env 配置允许的 context。</small>
-          </div>
-          <details v-if="isAdmin && useHarness" class="harness-yaml-input"><summary>提交部署 YAML（可选）</summary><textarea v-model="deploymentYaml" rows="5" maxlength="1048576" placeholder="粘贴 Deployment、Service、ConfigMap 等白名单资源 YAML；执行前会进行服务端 dry-run 和差异预览。"></textarea></details>
-          <p v-if="useDeepseek" class="privacy-hint">
-            开启后，本次问题、检索到的内部资料片段和本地初稿将发送给 DeepSeek。
-            <strong v-if="status && !status.deepseek_configured">尚未配置 API Key，本次仍将使用千问本地回答。</strong>
-          </p>
         </details>
 
         <form class="composer-form" @submit.prevent="ask()">
@@ -1015,7 +968,7 @@ onBeforeUnmount(() => {
           ></textarea>
           <div class="composer-actions">
             <button v-if="activeController" type="button" class="stop-answer" @click="stop">停止生成</button>
-            <button v-else type="submit" class="send-answer" :disabled="!question.trim() || (useHarness && (!selectedContext || !harnessStatus?.kubectl_available))">发送</button>
+            <button v-else type="submit" class="send-answer" :disabled="!question.trim()">发送</button>
           </div>
         </form>
         <small class="composer-hint">Enter 发送 · Shift + Enter 换行 · 切换页面后当前输入与生成状态都会保留</small>

@@ -962,3 +962,44 @@ progress::-webkit-progress-value { background: #3972bf; }
 @media (prefers-color-scheme: dark) {
   :root { color-scheme: light; }
 }
+
+/* 助手运行策略由管理员配置，技术目标只在管理端出现。 */
+.capability-settings { display: grid; gap: 10px; margin: 2px 0; padding: 15px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-soft); }
+.capability-settings legend { padding: 0 6px; color: #40516a; font-size: 12px; font-weight: 700; }
+.capability-option { display: flex; align-items: flex-start; gap: 10px; padding: 10px 11px; border: 1px solid transparent; border-radius: 9px; background: #fff; cursor: pointer; }
+.capability-option:hover { border-color: #c5d5eb; }
+.capability-option input { margin-top: 3px; }
+.capability-option span { display: grid; gap: 3px; }
+.capability-option strong { color: var(--ink); font-size: 13px; }
+.capability-option small { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.harness-policy-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; border-left: 3px solid var(--brand); border-radius: 8px; background: #edf4ff; }
+.harness-policy-grid .answer-notice { grid-column: 1 / -1; margin: 0; }
+
+/* 角色列表占满内容区；编辑器按需从右侧出现。 */
+.role-admin-layout { width: 100%; }
+.role-list-panel { width: 100%; padding: 22px; }
+.role-list-panel .admin-table-wrap { width: 100%; overflow-x: visible; }
+.role-list-panel .admin-table { table-layout: fixed; }
+.role-list-panel .admin-table th:nth-child(1) { width: 15%; }
+.role-list-panel .admin-table th:nth-child(2) { width: 29%; }
+.role-list-panel .admin-table th:nth-child(3),
+.role-list-panel .admin-table th:nth-child(4),
+.role-list-panel .admin-table th:nth-child(5) { width: 9%; }
+.role-list-panel .admin-table th:nth-child(6) { width: 15%; }
+.role-list-panel .admin-table th:nth-child(7) { width: 14%; }
+.role-list-panel .admin-table td { overflow: hidden; text-overflow: ellipsis; }
+.role-description { white-space: normal !important; line-height: 1.55; }
+.role-editor-backdrop { position: fixed; z-index: 80; inset: 64px 0 0; display: flex; justify-content: flex-end; background: rgba(20,35,56,.28); backdrop-filter: blur(2px); }
+.role-editor-panel { width: min(620px, 100%); height: 100%; overflow-y: auto; padding: 26px; border: 0; border-left: 1px solid var(--line); border-radius: 0; box-shadow: -18px 0 48px rgba(24,48,79,.14); }
+.role-editor-panel .close-button { padding: 0 5px; color: #5b6879; font-size: 28px; line-height: 1; }
+.role-editor-panel .assistant-checkboxes { max-height: 240px; overflow-y: auto; padding-right: 4px; }
+
+@media (max-width: 900px) {
+  .role-list-panel .admin-table-wrap { overflow-x: auto; }
+  .role-list-panel .admin-table { min-width: 820px; table-layout: auto; }
+  .harness-policy-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) {
+  .role-editor-backdrop { inset-block-start: 58px; }
+  .role-editor-panel { padding: 20px 16px; }
+}

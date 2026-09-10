@@ -6,6 +6,7 @@ import type { KnowledgeBaseRecord } from '../../types/knowledgeBases'
 import { createAssistant, deleteAssistant, setAssistantEnabled, setAssistantKnowledgeBases, updateAssistant } from '../../api/assistants'
 import { listAssistants } from '../../api/assistants'
 import type { AssistantRecord } from '../../types/assistant'
+import { getHarnessStatus, getNamespaces } from '../../api/harness'
 
 const DEFAULT_PROMPT = '你是公司内部知识助手。只能把提供的内部资料作为公司事实依据，用专业、简洁、有引用的中文回答；没有可靠资料时明确说明，不编造公司结论。'
 
@@ -17,6 +18,8 @@ const error = ref('')
 const saving = ref(false)
 const useAllKnowledgeBases = ref(true)
 const selectedKbIds = ref<string[]>([])
+const harnessContexts = ref<string[]>([])
+const harnessNamespaces = ref<string[]>(['default'])
 
 const selected = computed(() => assistants.value.find((item) => item.id === selectedId.value) ?? null)
 
@@ -28,6 +31,10 @@ const form = reactive({
   model_name: 'qwen3:8b',
   use_deepseek_allowed: true,
   default_deepseek_enabled: false,
+  deepseek_enabled: false,
+  harness_enabled: false,
+  harness_context: '',
+  harness_namespace: 'default',
   retrieval_limit: 6,
   temperature: 0.2,
   welcome_message: '',
@@ -39,9 +46,12 @@ async function refresh() {
   loading.value = true
   error.value = ''
   try {
-    const [assistantResult, kbResult] = await Promise.all([listAssistants(), listKnowledgeBases()])
+    const [assistantResult, kbResult, harnessResult] = await Promise.all([
+      listAssistants(), listKnowledgeBases(), getHarnessStatus().catch(() => null),
+    ])
     assistants.value = assistantResult.items
     knowledgeBases.value = kbResult.items
+    harnessContexts.value = harnessResult?.contexts ?? []
     if (!selectedId.value || !assistants.value.some((item) => item.id === selectedId.value)) {
       selectedId.value = assistants.value[0]?.id ?? ''
     }
@@ -61,6 +71,11 @@ function applyToForm(item: AssistantRecord) {
   form.model_name = item.model_name || 'qwen3:8b'
   form.use_deepseek_allowed = item.use_deepseek_allowed
   form.default_deepseek_enabled = item.default_deepseek_enabled
+  form.deepseek_enabled = item.deepseek_enabled
+  form.harness_enabled = item.harness_enabled
+  form.harness_context = item.harness_context || ''
+  form.harness_namespace = item.harness_namespace || 'default'
+  void refreshHarnessNamespaces()
   form.retrieval_limit = item.retrieval_limit
   form.temperature = item.temperature
   form.welcome_message = item.welcome_message || ''
@@ -85,6 +100,10 @@ function newForm() {
   form.model_name = 'qwen3:8b'
   form.use_deepseek_allowed = true
   form.default_deepseek_enabled = false
+  form.deepseek_enabled = false
+  form.harness_enabled = false
+  form.harness_context = harnessContexts.value[0] || ''
+  form.harness_namespace = 'default'
   form.retrieval_limit = 6
   form.temperature = 0.2
   form.welcome_message = ''
@@ -130,8 +149,12 @@ async function save() {
     avatar: form.avatar.trim() || '康',
     model_provider: form.model_provider,
     model_name: form.model_name.trim() || null,
-    use_deepseek_allowed: form.use_deepseek_allowed,
-    default_deepseek_enabled: form.default_deepseek_enabled,
+    use_deepseek_allowed: form.deepseek_enabled,
+    default_deepseek_enabled: form.deepseek_enabled,
+    deepseek_enabled: form.deepseek_enabled,
+    harness_enabled: form.harness_enabled,
+    harness_context: form.harness_enabled ? form.harness_context || null : null,
+    harness_namespace: form.harness_namespace || 'default',
     retrieval_limit: Number(form.retrieval_limit) || 6,
     temperature: Number(form.temperature) ?? 0.2,
     welcome_message: form.welcome_message.trim() || null,
@@ -153,6 +176,20 @@ async function save() {
     error.value = reason instanceof ApiError ? reason.message : '保存失败'
   } finally {
     saving.value = false
+  }
+}
+
+async function refreshHarnessNamespaces() {
+  if (!form.harness_context) {
+    harnessNamespaces.value = ['default']
+    return
+  }
+  try {
+    const values = await getNamespaces(form.harness_context)
+    harnessNamespaces.value = values.length ? values : ['default']
+    if (!harnessNamespaces.value.includes(form.harness_namespace)) form.harness_namespace = harnessNamespaces.value[0]
+  } catch {
+    harnessNamespaces.value = [form.harness_namespace || 'default']
   }
 }
 
@@ -233,10 +270,31 @@ onMounted(refresh)
             <label class="form-row">召回片段数量<input v-model.number="form.retrieval_limit" type="number" min="1" max="20"></label>
             <label class="form-row">温度（0~2）<input v-model.number="form.temperature" type="number" min="0" max="2" step="0.05"></label>
           </div>
-          <div class="assistant-checkboxes">
-            <label><input v-model="form.use_deepseek_allowed" type="checkbox">允许使用 DeepSeek 外部增强</label>
-            <label><input v-model="form.default_deepseek_enabled" type="checkbox">默认开启 DeepSeek（需同时允许）</label>
-          </div>
+          <fieldset class="capability-settings">
+            <legend>模型与工具能力</legend>
+            <label class="capability-option">
+              <input v-model="form.deepseek_enabled" type="checkbox">
+              <span><strong>启用 DeepSeek 增强</strong><small>检索完成后，将允许外发的资料片段交给 DeepSeek 优化答案。</small></span>
+            </label>
+            <label class="capability-option">
+              <input v-model="form.harness_enabled" type="checkbox">
+              <span><strong>启用 Harness 运维工具</strong><small>仅管理员使用该助手时生效；Kubernetes 写操作仍需逐次确认。</small></span>
+            </label>
+            <div v-if="form.harness_enabled" class="harness-policy-grid">
+              <label class="form-row">Kubernetes 环境（Context）
+                <select v-model="form.harness_context" @change="refreshHarnessNamespaces">
+                  <option value="" disabled>请选择已授权环境</option>
+                  <option v-for="context in harnessContexts" :key="context" :value="context">{{ context }}</option>
+                </select>
+              </label>
+              <label class="form-row">资源空间（Namespace）
+                <select v-model="form.harness_namespace">
+                  <option v-for="namespace in harnessNamespaces" :key="namespace" :value="namespace">{{ namespace }}</option>
+                </select>
+              </label>
+              <p v-if="!harnessContexts.length" class="answer-notice is-warning">尚未配置允许的 Kubernetes Context，Harness 暂时不会生效。</p>
+            </div>
+          </fieldset>
           <label class="form-row">欢迎语<textarea v-model="form.welcome_message" rows="2" maxlength="2000" placeholder="对话空白页展示给用户的欢迎消息"></textarea></label>
           <label class="form-row">推荐问题（每行一个）
             <textarea v-model="form.recommended_questions" rows="3" placeholder="一行一个推荐问题"></textarea>

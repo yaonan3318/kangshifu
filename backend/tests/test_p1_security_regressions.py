@@ -43,10 +43,10 @@ class P1SecurityRegressionTests(unittest.TestCase):
         answer_page = source("frontend/src/features/answer/AnswerPage.vue")
         self.assertIn("const turn: AnswerTurn = pending ??", answer_page)
 
-    def test_harness_controls_are_admin_only_in_frontend(self) -> None:
+    def test_harness_controls_are_not_exposed_in_answer_frontend(self) -> None:
         answer_page = source("frontend/src/features/answer/AnswerPage.vue")
-        self.assertIn('v-if="isAdmin" class="deepseek-toggle"', answer_page)
-        self.assertIn("if (isAdmin.value)", answer_page)
+        self.assertNotIn("使用 Harness", answer_page)
+        self.assertNotIn("选择 Kubernetes context", answer_page)
 
     def test_fastapi_query_parameters_do_not_use_pydantic_field(self) -> None:
         chat_api = source("backend/app/api/chat.py")
@@ -135,6 +135,7 @@ class P1SecurityRegressionTests(unittest.TestCase):
             ("0014_audit_completion.py", "0014_audit_completion", "0013_identity_management"),
             ("0015_feedback_ranking.py", "0015_feedback_ranking", "0014_audit_completion"),
             ("0016_feedback_documents.py", "0016_feedback_documents", "0015_feedback_ranking"),
+            ("0017_assistant_runtime_policy.py", "0017_assistant_runtime_policy", "0016_feedback_documents"),
         ):
             content = (versions / filename).read_text(encoding="utf-8")
             self.assertIn(f'revision = "{revision}"', content)
@@ -144,6 +145,24 @@ class P1SecurityRegressionTests(unittest.TestCase):
     def test_frontend_dependencies_are_pinned(self) -> None:
         package = source("frontend/package.json")
         self.assertNotIn('"latest"', package)
+
+    def test_assistant_owns_external_and_harness_runtime_policy(self) -> None:
+        model = source("backend/app/models/assistant.py")
+        for field in ("deepseek_enabled", "harness_enabled", "harness_context", "harness_namespace"):
+            self.assertIn(field, model)
+        answer_api = source("backend/app/api/answer.py")
+        self.assertIn("apply_assistant_runtime_policy", answer_api)
+
+    def test_answer_page_hides_runtime_policy_controls(self) -> None:
+        answer_page = source("frontend/src/features/answer/AnswerPage.vue")
+        self.assertNotIn("使用 DeepSeek 增强", answer_page)
+        self.assertNotIn("使用 Harness", answer_page)
+        self.assertNotIn("选择 Kubernetes context", answer_page)
+
+    def test_role_list_uses_full_width_layout_and_drawer(self) -> None:
+        role_page = source("frontend/src/features/admin/RoleAdmin.vue")
+        self.assertIn('class="role-admin-layout"', role_page)
+        self.assertIn('class="role-editor-backdrop"', role_page)
 
 
 if __name__ == "__main__":

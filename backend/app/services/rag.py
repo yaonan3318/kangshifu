@@ -131,7 +131,7 @@ class RagService:
 
         provider = AnswerProvider.LOCAL
         deepseek_used = False
-        deepseek_blocked = request.use_deepseek and not cfg["deepseek_allowed"]
+        deepseek_blocked = cfg["deepseek_enabled"] and not cfg["deepseek_allowed"]
         content_blocked = bool(sources) and not cfg["content_allows_external"]
         # API Key 存在并不等于自动上传资料；助手允许、内容允许且用户（或默认配置）开启时才增强。
         if deepseek_blocked:
@@ -150,7 +150,7 @@ class RagService:
                     message="资料策略禁止将检索到的资料发送到外部模型，本次使用本地模型回答。",
                 ),
             )
-        elif (request.use_deepseek or cfg["default_deepseek_enabled"]) and cfg["content_allows_external"]:
+        elif cfg["deepseek_enabled"] and cfg["content_allows_external"]:
             if not self.deepseek.configured:
                 yield AnswerEvent(
                     type="warning",
@@ -211,7 +211,7 @@ class RagService:
         yield AnswerEvent(type="metrics", metrics=metrics)
         yield AnswerEvent(
             type="done", provider=provider, scope=scope,
-            deepseek_requested=request.use_deepseek, deepseek_used=deepseek_used,
+            deepseek_requested=cfg["deepseek_enabled"], deepseek_used=deepseek_used,
             source_count=len(sources),
         )
 
@@ -240,6 +240,7 @@ class RagService:
             "system_prompt": assistant.system_prompt if assistant is not None else None,
             "deepseek_allowed": assistant.use_deepseek_allowed if assistant is not None else True,
             "default_deepseek_enabled": assistant.default_deepseek_enabled if assistant is not None else False,
+            "deepseek_enabled": assistant.deepseek_enabled if assistant is not None else False,
             "content_allows_external": True,
         }
 
@@ -261,7 +262,7 @@ class RagService:
     def _cache_eligible(self, request: AnswerRequest, cfg: dict) -> bool:
         return bool(
             self.settings.answer_cache_enabled and request.question.strip()
-            and not request.use_deepseek and not cfg["default_deepseek_enabled"]
+            and not cfg["deepseek_enabled"]
             and not request.use_harness and not request.regenerate_message_id
         )
 

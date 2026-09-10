@@ -34,6 +34,8 @@ def _assistant_payload(assistant: Assistant) -> AssistantOut:
         system_prompt=assistant.system_prompt, model_provider=assistant.model_provider,
         model_name=assistant.model_name, use_deepseek_allowed=assistant.use_deepseek_allowed,
         default_deepseek_enabled=assistant.default_deepseek_enabled,
+        deepseek_enabled=assistant.deepseek_enabled, harness_enabled=assistant.harness_enabled,
+        harness_context=assistant.harness_context, harness_namespace=assistant.harness_namespace,
         retrieval_limit=assistant.retrieval_limit, temperature=assistant.temperature,
         recommended_questions=list(assistant.recommended_questions or []),
         enabled=assistant.enabled, created_at=assistant.created_at, updated_at=assistant.updated_at,
@@ -55,6 +57,10 @@ def _apply(session: Session, assistant: Assistant, body: AssistantUpsert) -> Ass
     for key, value in values.items():
         if key == "recommended_questions" and value is not None:
             value = [str(item).strip() for item in value if str(item).strip()]
+        elif key == "harness_namespace":
+            value = (value or "default").strip()
+        elif key == "harness_context":
+            value = value.strip() if value and value.strip() else None
         if key != "name" or (value and value.strip()):
             setattr(assistant, key, value)
     if "name" in values and values["name"] is not None:
@@ -102,6 +108,10 @@ def create_assistant(
             model_name=body.model_name or None,
             use_deepseek_allowed=True if body.use_deepseek_allowed is None else body.use_deepseek_allowed,
             default_deepseek_enabled=False if body.default_deepseek_enabled is None else body.default_deepseek_enabled,
+            deepseek_enabled=False if body.deepseek_enabled is None else body.deepseek_enabled,
+            harness_enabled=False if body.harness_enabled is None else body.harness_enabled,
+            harness_context=(body.harness_context or None),
+            harness_namespace=(body.harness_namespace or "default").strip(),
             retrieval_limit=body.retrieval_limit or 6,
             temperature=0.2 if body.temperature is None else body.temperature,
             recommended_questions=[str(q) for q in (body.recommended_questions or [])],
