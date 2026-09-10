@@ -184,7 +184,7 @@ onMounted(refresh)
               <option v-for="option in parentOptions" :key="option.id" :value="option.id">{{ '　'.repeat(option.depth) }}{{ option.name }}</option>
             </select>
           </label>
-          <label class="assistant-checkboxes"><input v-model="form.enabled" type="checkbox">启用部门</label>
+          <label class="admin-check-row"><input v-model="form.enabled" type="checkbox"><span>启用部门</span></label>
           <div class="form-actions">
             <button type="button" class="secondary-action" @click="closeEditor">取消</button>
             <button type="submit" :disabled="saving">{{ saving ? '保存中…' : '保存' }}</button>

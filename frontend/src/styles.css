@@ -1046,6 +1046,8 @@ progress::-webkit-progress-value { background: #3972bf; }
 .assistant-table-name .mini-avatar { display: grid; flex: 0 0 auto; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(145deg, #2d68bd, #1b477f); color: #fff; font-weight: 700; }
 .assistant-description { color: var(--muted); line-height: 1.55; }
 .assistant-editor-panel { width: min(760px, 100%); }
+.admin-check-row { display: inline-flex; width: fit-content; align-items: center; gap: 8px; color: #40516a; font-size: 13px; font-weight: 600; cursor: pointer; }
+.admin-check-row input { width: 16px; height: 16px; margin: 0; accent-color: var(--brand); }
 
 @media (max-width: 900px) {
   .role-list-panel .admin-table-wrap,

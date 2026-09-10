@@ -181,7 +181,7 @@ onMounted(refresh)
         <form v-if="creating || selectedId" class="assistant-form" @submit.prevent="save">
           <label class="form-row">角色名称<input v-model="form.name" maxlength="255"></label>
           <label class="form-row">描述<textarea v-model="form.description" rows="2" maxlength="500"></textarea></label>
-          <label class="assistant-checkboxes"><input v-model="form.enabled" type="checkbox">启用角色</label>
+          <label class="admin-check-row"><input v-model="form.enabled" type="checkbox"><span>启用角色</span></label>
           <div class="form-actions">
             <button type="button" class="secondary-action" @click="selectedId = ''; creating = false">取消</button>
             <button type="submit" :disabled="saving">{{ saving ? '保存中…' : '保存' }}</button>

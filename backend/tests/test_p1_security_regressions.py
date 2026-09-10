@@ -194,6 +194,12 @@ class P1SecurityRegressionTests(unittest.TestCase):
         form_at = user_page.index('class="assistant-form"', backdrop_at)
         self.assertLess(drawer_error_at, form_at)
 
+    def test_single_admin_checkboxes_use_inline_alignment(self) -> None:
+        role_page = source("frontend/src/features/admin/RoleAdmin.vue")
+        department_page = source("frontend/src/features/admin/DepartmentAdmin.vue")
+        self.assertIn('class="admin-check-row"', role_page)
+        self.assertIn('class="admin-check-row"', department_page)
+
 
 if __name__ == "__main__":
     unittest.main()
