@@ -10,15 +10,26 @@ from app.errors import AppError
 from app.models import Document, DocumentChunk
 from app.services.embeddings import EmbeddingService
 from app.services.keywords import keyword_text
+from app.services.permissions import PermissionResolver, require_manage, require_read
 
 
 class ChunkService:
-    def __init__(self, session: Session, settings: Settings):
+    def __init__(self, session: Session, settings: Settings, user=None):
         self.session = session
         self.embeddings = EmbeddingService(settings)
+        self.resolver = PermissionResolver(session, user) if user is not None else None
+
+    def _check_read(self, document: Document) -> None:
+        if self.resolver is not None:
+            require_read(self.resolver, document)
+
+    def _check_manage(self, document: Document) -> None:
+        if self.resolver is not None:
+            require_manage(self.resolver, document)
 
     def list_chunks(self, document_id: uuid.UUID, page: int, page_size: int) -> tuple[list[DocumentChunk], int]:
-        self._active_document(document_id)
+        document = self._active_document(document_id)
+        self._check_read(document)
         clause = DocumentChunk.document_id == document_id
         total = self.session.scalar(select(func.count()).select_from(DocumentChunk).where(clause)) or 0
         items = list(self.session.scalars(
@@ -40,6 +51,7 @@ class ChunkService:
 
     def update_content(self, chunk_id: uuid.UUID, content: str) -> DocumentChunk:
         chunk = self.get(chunk_id)
+        self._check_manage(chunk.document)
         clean = content.strip()
         if not clean:
             raise AppError("EMPTY_CHUNK", "片段内容不能为空", 400)
@@ -57,6 +69,7 @@ class ChunkService:
 
     def restore_original(self, chunk_id: uuid.UUID) -> DocumentChunk:
         chunk = self.get(chunk_id)
+        self._check_manage(chunk.document)
         if chunk.original_content is None:
             raise AppError("CHUNK_NOT_EDITED", "片段没有可恢复的原始内容", 409)
         original = chunk.original_content
@@ -73,6 +86,7 @@ class ChunkService:
 
     def reindex(self, chunk_id: uuid.UUID) -> DocumentChunk:
         chunk = self.get(chunk_id)
+        self._check_manage(chunk.document)
         vector, search_text, token_count = self._build_index(chunk, chunk.content)
         chunk.embedding = vector
         chunk.search_vector = func.to_tsvector("simple", search_text)
@@ -83,6 +97,7 @@ class ChunkService:
 
     def set_enabled(self, chunk_id: uuid.UUID, enabled: bool) -> DocumentChunk:
         chunk = self.get(chunk_id)
+        self._check_manage(chunk.document)
         chunk.enabled = enabled
         self.session.commit()
         self.session.refresh(chunk)

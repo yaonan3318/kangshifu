@@ -31,5 +31,10 @@ dependencies = [
   "uvicorn[standard]>=0.32,<1",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<9",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

@@ -19,6 +19,10 @@ export interface DocumentRecord {
   version_number: number
   previous_version_id: string | null
   enabled: boolean
+  visibility: string
+  owner_user_id: string | null
+  sensitivity_level: string
+  external_llm_allowed: boolean
   deleted_at: string | null
   deleted_reason: string | null
   metadata_json: Record<string, unknown>

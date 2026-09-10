@@ -1,0 +1,508 @@
+康师傅公司知识助手 P1 收尾功能清单
+一、总体目标
+在现有 P1 基础上补齐公司内部使用所需的：
+- 用户管理
+- 部门管理
+- 角色管理
+- 文档权限配置
+- 审计日志管理
+- 反馈数据治理
+- 多用户权限测试
+技术栈保持不变：
+后端：Python 3.12/3.13 + FastAPI + SQLAlchemy + PostgreSQL/pgvector
+前端：Vue 3 + TypeScript + Vite
+认证：HttpOnly Cookie
+本地模型：Ollama qwen3:8b
+外部模型：可选 DeepSeek API
+二、必须保留的安全规则
+以下规则已经实现，不允许删除或弱化：
+1. 所有 /api/* 业务接口必须登录。
+2. 普通用户不能调用助手管理写接口。
+3. 普通用户不能调用任何 Harness 接口。
+4. Harness Kubernetes 写操作仍然必须人工确认。
+5. 文档检索必须在 SQL 查询阶段进行权限过滤。
+6. 问答缓存必须按用户、部门、角色及 ACL 版本隔离。
+7. 重新生成回答必须校验会话所有权。
+8. USER 类型的文档管理权限必须验证 subject_id == 当前用户ID。
+9. 受限资料不得发送给 DeepSeek。
+10. API Key、密码和会话令牌不得返回前端或写入日志。
+11. 不得删除或重建现有数据库，不得丢失 P0/P1 历史资料。
+12. 新数据库迁移从 0013 开始。
+13. 前端依赖继续使用固定版本，不得改回 "latest"。
+P1-9 用户管理页面
+目标
+管理员可以在页面管理本地账号，不需要直接操作 PostgreSQL。
+页面入口
+管理员顶部导航增加：
+系统管理
+进入后包含：
+用户管理
+部门管理
+角色管理
+审计日志
+普通用户不能看见此入口；即使直接调用 URL/API，后端也必须返回 403。
+用户列表
+显示字段：
+- 用户名
+- 显示名称
+- 所属部门
+- 角色
+- 是否超级管理员
+- 账号状态
+- 最近登录时间
+- 创建时间
+- 操作
+支持：
+- 用户名/显示名称搜索
+- 部门筛选
+- 角色筛选
+- 启用/停用筛选
+- 分页
+创建用户
+字段：
+- 用户名
+- 显示名称
+- 初始密码
+- 所属部门
+- 一个或多个角色
+- 是否启用
+- 是否超级管理员
+校验：
+- 用户名唯一
+- 用户名去除首尾空graded
+- 密码至少8位
+- 不允许选择已停用部门
+- 角色必须存在
+- 普通管理员不能创建超级管理员，或者当前阶段只允许超级管理员管理用户
+编辑用户
+支持修改：
+- 显示名称
+- 所属部门
+- 角色
+- 启用状态
+用户名原则上不允许修改。
+重置密码
+独立接口，例如：
+POST /api/users/{user_id}/reset-password
+请求：
+{
+  "new_password": "新密码"
+}
+要求：
+- 仅超级管理员可执行
+- 重置后撤销该用户所有现有登录会话
+- 不在响应和日志中记录明文密码
+- 写入审计日志
+停用用户
+要求：
+- 用户停用后立即无法继续访问业务接口
+- 同时撤销该用户全部登录会话
+- 不能停用当前唯一超级管理员
+- 不能停用自己，除非系统中还有其他启用的超级管理员
+- 写入审计日志
+用户 API
+检查并补齐：
+GET    /api/users
+POST   /api/users
+GET    /api/users/{user_id}
+PATCH  /api/users/{user_id}
+POST   /api/users/{user_id}/enable
+POST   /api/users/{user_id}/disable
+POST   /api/users/{user_id}/reset-password
+P1-10 部门管理
+数据结构
+现有 departments 表已经包含：
+- id
+- name
+- parent_id
+- enabled
+- created_at
+需要检查是否增加：
+- updated_at
+- 部门名称唯一约束策略
+如果新增字段，使用 0013 或后续迁移。
+部门树页面
+以树形方式显示，例如：
+公司
+├── 技术部
+│   ├── 后端组
+│   └── 算法组
+├── 人事部
+└── 财务部
+支持：
+- 新建根部门
+- 新建子部门
+- 修改部门名称
+- 移动到其他父部门
+- 启用/停用
+- 查看部门用户数量
+业务规则
+- 禁止形成循环父子关系
+- 部门不能把自己设为父部门
+- 停用部门前提示受影响用户数量
+- 停用部门后，部门权限资料默认不再向该部门用户开放
+- 有子部门时不能直接永久删除
+- 有用户时不能永久删除
+- 第一版建议只支持停用，不做永久删除
+- 部门层级向上继承规则保持与当前 PermissionResolver 一致
+部门 API
+GET    /api/departments/tree
+GET    /api/departments/{department_id}
+POST   /api/departments
+PATCH  /api/departments/{department_id}
+POST   /api/departments/{department_id}/enable
+POST   /api/departments/{department_id}/disable
+全部写接口仅超级管理员可用。
+P1-11 角色管理
+页面功能
+角色列表显示：
+- 角色名称
+- 描述
+- 用户数量
+- 被授权文档数量
+- 创建时间
+- 操作
+支持：
+- 创建角色
+- 编辑角色
+- 为角色分配用户
+- 启用/停用角色
+- 查看该角色可访问的文档
+数据结构
+现有 roles 表缺少启停字段时，增加：
+enabled BOOLEAN NOT NULL DEFAULT TRUE
+updated_at TIMESTAMPTZ
+通过新 Alembic 迁移完成。
+业务规则
+- 角色名称唯一
+- 已停用角色不参与新请求的权限判断
+- 停用角色不删除历史 ACL
+- 重新启用后原 ACL 可以恢复生效
+- 内置管理员角色不能删除
+- 第一版不做复杂 RBAC 菜单权限；角色主要用于文档访问范围
+角色 API
+GET    /api/roles
+POST   /api/roles
+GET    /api/roles/{role_id}
+PATCH  /api/roles/{role_id}
+POST   /api/roles/{role_id}/enable
+POST   /api/roles/{role_id}/disable
+PUT    /api/roles/{role_id}/users
+P1-12 文档访问权限配置页面
+这是 P1 收尾中优先级最高的功能。
+权限入口
+资料库文档详情页增加：
+访问权限
+只有以下用户可以编辑：
+- 超级管理员
+- 文档上传人
+- 获得该文档 MANAGE 权限的用户
+普通读者只能查看文档，不能读取完整 ACL 配置。
+可见范围
+支持五种范围：
+COMPANY     全公司
+PRIVATE     仅上传人
+DEPARTMENT  指定部门
+ROLE        指定角色
+USER        指定用户
+前端显示中文：
+- 全公司可见
+- 仅自己可见
+- 指定部门可见
+- 指定角色可见
+- 指定用户可见
+ACL 配置
+当选择部门、角色或用户时，可以添加多个授权对象。
+每个条目支持：
+READ    可查看、检索和问答
+MANAGE  可查看并管理文档
+页面显示：
+- 对象类型
+- 对象名称
+- 权限级别
+- 删除授权
+不能只显示 UUID。
+外部模型策略
+文档详情增加：
+资料敏感级别
+是否允许发送外部大模型
+敏感级别：
+PUBLIC
+INTERNAL
+CONFIDENTIAL
+RESTRICTED
+规则：
+- CONFIDENTIAL、RESTRICTED 始终禁止发给 DeepSeek
+- external_llm_allowed=false 时禁止发给 DeepSeek
+- 页面必须明确提示该设置只影响外部模型，不影响本地千问
+- DeepSeek 被拦截时，保留本地回答并显示原因
+权限后端规则
+所有入口必须使用同一套 PermissionResolver：
+- 文档列表
+- 文档详情
+- 下载
+- 文档片段查看
+- 资料检索
+- 知识问答
+- 检索实验室
+- 引用详情
+- 历史会话引用
+- 文档版本
+- 回收站
+不能只依赖前端隐藏。
+历史引用权限
+读取历史会话引用时重新检查当前用户权限：
+- 仍有权限：展示引用快照
+- 已失去权限：不返回正文快照，只显示“当前无权查看该引用”
+- 文档删除或停用但用户仍有权限：可以显示历史快照，并标记状态
+- 防止用户通过旧会话继续读取已撤销权限的资料
+ACL API
+现有接口需要调整：
+GET /api/documents/{document_id}/acl
+PUT /api/documents/{document_id}/access
+要求：
+- GET ACL 也必须要求 MANAGE
+- 校验所有部门、角色和用户确实存在
+- 校验对象是否启用
+- 去除重复 ACL
+- 整体使用事务
+- 无效 ACL 不得部分保存
+- 权限修改后立即使相关缓存失效
+- 写入审计日志，但不记录文档正文
+P1-13 审计日志管理
+审计页面
+仅超级管理员可访问。
+显示字段：
+- 时间
+- 操作用户
+- 操作类型
+- 目标类型
+- 目标名称或ID
+- IP地址
+- 是否成功
+- 错误代码
+- 详情
+支持筛选：
+- 时间范围
+- 用户
+- 操作类型
+- 目标类型
+- 成功/失败
+- 分页
+审计动作范围
+至少覆盖：
+登录与账号
+login_success
+login_failed
+logout
+user_created
+user_updated
+user_enabled
+user_disabled
+password_reset
+role_assignment_changed
+文档
+document_upload
+batch_upload_created
+batch_upload_resumed
+batch_upload_failed
+document_download
+document_delete
+document_restore
+document_purge
+document_reprocess
+document_access_change
+document_external_policy_change
+chunk_updated
+助手
+assistant_created
+assistant_updated
+assistant_enabled
+assistant_disabled
+assistant_deleted
+assistant_knowledge_bases_changed
+外部模型
+external_llm_requested
+external_llm_succeeded
+external_llm_failed
+external_llm_blocked
+Harness
+harness_started
+harness_tool_requested
+harness_approval_confirmed
+harness_approval_rejected
+harness_write_succeeded
+harness_write_failed
+审计要求
+- 成功和失败都记录
+- 不记录密码、Cookie、API Key
+- 不记录完整文档正文
+- DeepSeek 审计可以记录文档 ID，但不能复制全部发送内容
+- 审计写入失败不能导致核心业务数据回滚
+- 审计日志不能由普通管理员修改或删除
+- 当前版本永久保留，不做自动清理
+如果需要字段，新增迁移：
+success BOOLEAN
+error_code VARCHAR
+request_id VARCHAR
+P1-14 回答反馈治理
+当前已有能力
+目前已有：
+- 点赞
+- 点踩
+- 点踩原因
+- 用户备注
+- 管理员查看
+- 标记已处理
+不要重写已有功能。
+需要补齐
+管理员反馈页面增加筛选：
+- 点赞/点踩
+- 未处理/已处理
+- 助手
+- 用户
+- 时间范围
+- 无答案
+- 文档
+- 点踩原因
+显示：
+- 用户问题
+- 最终答案
+- 引用资料
+- 助手
+- 模型
+- 检索和生成耗时
+- 用户评价
+- 处理状态
+- 处理说明
+反馈影响检索排序
+遵循此前确认的规则：
+先记录反馈；
+达到样本门槛后；
+只对排序产生小幅影响。
+建议配置：
+COMPANY_SEARCH_FEEDBACK_RANKING_ENABLED=false
+COMPANY_SEARCH_FEEDBACK_MIN_SAMPLES=5
+COMPANY_SEARCH_FEEDBACK_MAX_BOOST=0.05
+计算原则：
+- 默认关闭
+- 某个文档或片段反馈样本少于5条，不影响排序
+- 正向反馈只能小幅加分
+- 负向反馈只能小幅减分
+- 调整绝对值不超过 0.05
+- 不得让反馈绕过最低证据阈值
+- 不得让无关键词/语义关联的资料进入结果
+- 管理员可在检索实验室看到原始分数和反馈调整分数
+- 删除、停用或无权访问的资料永远不能因反馈重新出现
+第一版可以先完成统计和配置，保持默认关闭。
+P1-15 多用户权限集成测试
+现有静态安全测试要保留，但不能只靠字符串断言。
+测试账号矩阵
+测试至少创建：
+admin       超级管理员
+tech_user   技术部普通用户
+hr_user     人事部普通用户
+role_user   具有指定角色
+other_user  无相关权限
+测试文档
+company_doc       COMPANY
+private_doc       PRIVATE
+department_doc    DEPARTMENT=技术部
+role_doc          ROLE=指定角色
+user_doc          USER=tech_user
+managed_doc       USER=tech_user, MANAGE
+restricted_doc    CONFIDENTIAL
+必测场景
+检索权限
+- 全公司文档所有用户可搜索
+- 私有文档只有上传人和管理员可搜索
+- 技术部门文档 HR 用户搜不到
+- 角色文档无角色用户搜不到
+- 指定用户文档其他用户搜不到
+- 无权限文档不能出现在关键词结果
+- 无权限文档不能出现在向量结果
+- 无权限文档不能出现在 RRF 融合结果
+- 无权限文档不能出现在 RAG 引用中
+- 无权限文档不能通过检索实验室看到
+API 权限
+- 普通用户调用助手写接口返回403
+- 普通用户调用 Harness 所有接口返回403
+- 普通用户不能读取他人的会话
+- 普通用户不能重新生成他人的回答
+- 普通用户不能提交他人回答的反馈
+- 普通用户不能读取文档 ACL
+- 普通用户不能下载无权限文档
+- 普通用户不能查看无权限文档片段
+缓存隔离
+重点测试：
+1. 管理员查询受限资料并生成缓存。
+2. 普通用户使用完全相同的问题查询。
+3. 普通用户不能命中管理员答案或引用。
+4. 修改用户部门、角色或文档 ACL。
+5. 原缓存不得继续泄露旧权限资料。
+DeepSeek 外发
+- 普通内部资料允许外发时正常调用
+- external_llm_allowed=false 时不调用
+- CONFIDENTIAL 不调用
+- RESTRICTED 不调用
+- 多条引用中只要有一条禁止外发，整次不调用
+- 页面显示本地降级提示
+- 审计日志记录阻止原因
+用户停用
+- 停用用户后旧 Cookie 立即失效
+- 用户不能继续调用 API
+- 用户文档和历史记录不删除
+- 管理员仍可查看审计记录
+测试技术
+建议使用：
+pytest
+FastAPI TestClient 或 httpx AsyncClient
+临时 PostgreSQL 测试库
+不要在测试中连接正式数据库、删除正式附件或调用真实 DeepSeek。
+P1-16 页面与体验收尾
+系统管理导航
+管理员可见：
+用户
+部门
+角色
+助手
+反馈
+审计
+统计
+普通用户只显示：
+知识问答
+资料检索
+资料库
+是否允许普通用户上传资料可先保持现状，但管理功能必须由后端鉴权。
+统一错误展示
+前端针对以下状态显示中文提示：
+- 401：登录已失效，请重新登录
+- 403：没有操作权限
+- 404：对象不存在或无权查看
+- 409：名称重复或状态冲突
+- 422：输入参数不正确
+- 500：系统内部错误
+登录失效时自动回到登录页，但不要丢失未发送的输入草稿。
+删除确认
+以下操作必须二次确认：
+- 停用用户
+- 重置密码
+- 停用部门
+- 停用角色
+- 删除助手
+- 永久删除资料
+- 修改资料为全公司可见
+- 授予 MANAGE 权限
+数据库迁移要求
+从当前迁移头 0012_answer_feedback 之后继续：
+0013_identity_management
+0014_audit_completion
+0015_feedback_ranking
+可以根据实际字段合并，但必须满足：
+- 升级不清空旧数据
+- 旧资料继续默认 COMPANY
+- 旧用户、会话、助手和反馈保留
+- 每个迁移都提供 downgrade()
+- 不使用 Base.metadata.create_all() 代替 Alembic
+- 固定 UUID 参数类型，避免此前 UUID/VARCHAR 错误
+- 在 Mac PostgreSQL 16 + pgvector 环境验证升级

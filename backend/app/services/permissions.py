@@ -27,23 +27,25 @@ class PermissionResolver:
 
     @property
     def department_ids(self) -> list[uuid.UUID]:
-        """用户所在部门及其全部上级部门；授予任一级的文档都可见。"""
+        """用户所在部门及其全部上级部门；停用部门不再授予访问权限。"""
         if self._ancestor_department_ids is None:
             result: list[uuid.UUID] = []
             current_id = self.user.department_id if self.user else None
             seen: set[uuid.UUID] = set()
             while current_id and current_id not in seen:
                 seen.add(current_id)
-                result.append(current_id)
                 row = self.session.get(Department, current_id)
+                if row is not None and row.enabled:
+                    result.append(current_id)
                 current_id = row.parent_id if row else None
             self._ancestor_department_ids = result
         return self._ancestor_department_ids
 
     @property
     def role_ids(self) -> list[uuid.UUID]:
+        """仅启用中的角色参与权限判断；停用角色保留历史 ACL 但不生效。"""
         if self._role_ids is None:
-            self._role_ids = [role.id for role in (self.user.roles if self.user else [])]
+            self._role_ids = [role.id for role in (self.user.roles if self.user else []) if role.enabled]
         return self._role_ids
 
     def visibility_clauses(self) -> list:

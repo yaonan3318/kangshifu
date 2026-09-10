@@ -17,6 +17,9 @@ class AuditLogOut(BaseModel):
     target_id: uuid.UUID | None
     detail: dict
     ip_address: str | None
+    success: bool
+    error_code: str | None
+    request_id: str | None
     created_at: datetime
 
 

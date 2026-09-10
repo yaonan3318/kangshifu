@@ -1,4 +1,4 @@
-"""检索诊断、标准问题和评测运行接口。"""
+"""检索诊断、标准问题和评测运行接口（仅管理员）。"""
 
 import uuid
 from typing import Annotated
@@ -6,10 +6,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.orm import Session
 
+from app.api.auth import current_user
 from app.config import Settings, get_settings
 from app.db import get_session
 from app.schemas.retrieval_lab import RetrievalInspectRequest, RetrievalInspectResponse, TestCaseCreate, TestCaseListResponse, TestCaseResponse, TestCaseUpdate, TestRunListResponse, TestRunResponse
 from app.schemas.search import SearchRequest
+from app.services.permissions import require_admin
 from app.services.retrieval_evaluation import RetrievalEvaluationService
 from app.services.search import SearchService
 
@@ -17,13 +19,18 @@ from app.services.search import SearchService
 router = APIRouter(prefix="/api/retrieval-lab", tags=["retrieval-lab"])
 
 
-def get_service(session: Annotated[Session, Depends(get_session)], settings: Annotated[Settings, Depends(get_settings)]):
-    return RetrievalEvaluationService(session, settings)
+def get_service(
+    request: Request,
+    session: Annotated[Session, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> RetrievalEvaluationService:
+    require_admin(current_user(request))
+    return RetrievalEvaluationService(session, settings, user=current_user(request))
 
 
 @router.post("/inspect", response_model=RetrievalInspectResponse)
 def inspect(body: RetrievalInspectRequest, http_request: Request, session: Annotated[Session, Depends(get_session)], settings: Annotated[Settings, Depends(get_settings)]):
-    user = getattr(http_request.state, "auth_user", None)
+    user = require_admin(current_user(http_request))
     outcome = SearchService(session, settings, user=user).search_with_diagnostics(SearchRequest(
         query=body.query, knowledge_base_id=body.knowledge_base_id, limit=body.limit, include_stages=True,
     ))

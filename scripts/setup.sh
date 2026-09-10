@@ -59,7 +59,7 @@ else
   "$python_command" -m venv "$project_dir/backend/.venv"
 fi
 "$project_dir/backend/.venv/bin/python" -m pip install --upgrade pip
-"$project_dir/backend/.venv/bin/python" -m pip install -e "$project_dir/backend"
+"$project_dir/backend/.venv/bin/python" -m pip install -e "$project_dir/backend[dev]"
 
 if [[ ! -f "$project_dir/backend/.env" ]]; then
   cp "$project_dir/.env.example" "$project_dir/backend/.env"

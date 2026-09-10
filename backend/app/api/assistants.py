@@ -14,9 +14,17 @@ from app.schemas.assistant import (
     AssistantKnowledgeBasesPut, AssistantListResponse, AssistantOut, AssistantUpsert,
 )
 from app.api.auth import current_user
+from app.services.audit import record as audit_record
 from app.services.permissions import require_admin
 
 router = APIRouter(prefix="/api/assistants", tags=["assistants"])
+
+
+def _meta(request: Request) -> dict:
+    return {
+        "ip_address": request.client.host if request.client else None,
+        "request_id": request.headers.get("X-Request-ID"),
+    }
 
 
 def _assistant_payload(assistant: Assistant) -> AssistantOut:
@@ -99,6 +107,10 @@ def create_assistant(
     session.add(assistant)
     session.commit()
     session.refresh(assistant)
+    audit_record(
+        session, "assistant_created", user=current_user(request),
+        target_type="assistant", target_id=assistant.id, detail={"name": assistant.name}, **_meta(request),
+    )
     return _load(session, assistant.id)
 
 
@@ -118,8 +130,13 @@ def update_assistant(
     session: Annotated[Session, Depends(get_session)],
 ) -> AssistantOut:
     """更新助手字段；仅更新显式提供的字段。"""
-    require_admin(current_user(request))
-    return _assistant_payload(_apply(session, _load(session, assistant_id), body))
+    admin = require_admin(current_user(request))
+    payload = _assistant_payload(_apply(session, _load(session, assistant_id), body))
+    audit_record(
+        session, "assistant_updated", user=admin, target_type="assistant", target_id=assistant_id,
+        detail={"fields": sorted(body.model_dump(exclude_unset=True).keys())}, **_meta(request),
+    )
+    return payload
 
 
 @router.post("/{assistant_id}/enable", response_model=AssistantOut)
@@ -128,10 +145,14 @@ def enable_assistant(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> AssistantOut:
-    require_admin(current_user(request))
+    admin = require_admin(current_user(request))
     assistant = _load(session, assistant_id)
     assistant.enabled = True
     session.commit()
+    audit_record(
+        session, "assistant_enabled", user=admin, target_type="assistant", target_id=assistant_id,
+        detail={"name": assistant.name}, **_meta(request),
+    )
     return _assistant_payload(_load(session, assistant_id))
 
 
@@ -141,10 +162,14 @@ def disable_assistant(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> AssistantOut:
-    require_admin(current_user(request))
+    admin = require_admin(current_user(request))
     assistant = _load(session, assistant_id)
     assistant.enabled = False
     session.commit()
+    audit_record(
+        session, "assistant_disabled", user=admin, target_type="assistant", target_id=assistant_id,
+        detail={"name": assistant.name}, **_meta(request),
+    )
     return _assistant_payload(_load(session, assistant_id))
 
 
@@ -156,7 +181,7 @@ def set_assistant_knowledge_bases(
     session: Annotated[Session, Depends(get_session)],
 ) -> AssistantOut:
     """设置助手使用的知识库；传入空数组表示“全部启用知识库”。"""
-    require_admin(current_user(request))
+    admin = require_admin(current_user(request))
     assistant = _load(session, assistant_id)
     ids = list(dict.fromkeys(body.knowledge_base_ids))
     if ids:
@@ -176,6 +201,11 @@ def set_assistant_knowledge_bases(
             assistant_knowledge_bases.delete().where(assistant_knowledge_bases.c.assistant_id == assistant_id)
         )
     session.commit()
+    audit_record(
+        session, "assistant_knowledge_bases_changed", user=admin,
+        target_type="assistant", target_id=assistant_id,
+        detail={"knowledge_base_ids": [str(item) for item in ids]}, **_meta(request),
+    )
     return _assistant_payload(_load(session, assistant_id))
 
 
@@ -186,10 +216,15 @@ def delete_assistant(
     session: Annotated[Session, Depends(get_session)],
 ) -> dict:
     """删除助手；默认助手不可删除。"""
-    require_admin(current_user(request))
+    admin = require_admin(current_user(request))
     if assistant_id == DEFAULT_ASSISTANT_ID:
         raise AppError("DEFAULT_ASSISTANT_PROTECTED", "默认助手不可删除", 400)
     assistant = _load(session, assistant_id)
+    name = assistant.name
     session.delete(assistant)
     session.commit()
+    audit_record(
+        session, "assistant_deleted", user=admin, target_type="assistant", target_id=assistant_id,
+        detail={"name": name}, **_meta(request),
+    )
     return {"deleted": True}

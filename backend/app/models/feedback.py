@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, func, text
+from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -24,6 +24,8 @@ class AnswerFeedback(Base):
         UUID(as_uuid=True), ForeignKey("chat_messages.id", ondelete="CASCADE"), index=True
     )
     user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    # 反馈可归因到被引用文档，供“反馈影响检索排序”统计使用；无引用时为 NULL。
+    document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), index=True)
     rating: Mapped[FeedbackRating] = mapped_column(Enum(FeedbackRating, native_enum=False))
     reasons: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
     comment: Mapped[str | None] = mapped_column(Text)
@@ -33,3 +35,17 @@ class AnswerFeedback(Base):
     resolution_note: Mapped[str | None] = mapped_column(Text)
 
     message = relationship("ChatMessage", foreign_keys=[message_id])
+
+
+class DocumentFeedbackStats(Base):
+    """按文档聚合的反馈统计；排序只在其样本达到门槛后才产生小幅调整。"""
+    __tablename__ = "document_feedback_stats"
+
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True
+    )
+    up_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    down_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    sample_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    score: Mapped[float] = mapped_column(Float, default=0.0, server_default=text("0"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

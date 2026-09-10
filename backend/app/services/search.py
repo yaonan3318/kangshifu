@@ -12,6 +12,7 @@ from app.config import Settings
 from app.models import Document, DocumentAcl, DocumentChunk, KnowledgeBase, Tag
 from app.schemas.search import RetrievalStageItem, SearchDiagnostics, SearchRequest, SearchResult
 from app.services.embeddings import EmbeddingService
+from app.services.feedback_ranking import FeedbackRankingService
 from app.services.keywords import keyword_text
 from app.services.query_processing import QueryProcessor
 from app.services.reranking import Reranker
@@ -28,6 +29,8 @@ class Candidate:
     fusion_score: float = 0.0
     rerank_score: float | None = None
     final_score: float = 0.0
+    adjusted_score: float = 0.0
+    feedback_boost: float = 0.0
     sources: set[str] | None = None
 
 
@@ -45,6 +48,7 @@ class SearchService:
         self.embeddings = EmbeddingService(settings)
         self.processor = QueryProcessor(settings.search_synonyms)
         self.reranker = Reranker(settings)
+        self.feedback = FeedbackRankingService(session, settings)
         # 普通用户只检索对其可见的资料；管理员/无用户上下文不限制。
         self.resolver = PermissionResolver(session, user) if user is not None else None
 
@@ -89,6 +93,7 @@ class SearchService:
         mark = perf_counter()
         ranked, warning, mode = self._rerank(processed.normalized, candidates)
         timings["rerank"] = self._milliseconds(mark)
+        ranked = self._apply_feedback(ranked)
         accepted = self._accept(ranked, request.limit)
         if request.include_stages:
             stages["rerank"] = [self._stage_item(item, item.rerank_score if item.rerank_score is not None else item.final_score) for item in ranked]
@@ -182,6 +187,19 @@ class SearchService:
         selected.sort(key=lambda item: (-item.final_score, str(item.chunk.id)))
         return selected + candidates[len(selected):], outcome.warning, "hybrid_rerank"
 
+    def _apply_feedback(self, candidates: list[Candidate]) -> list[Candidate]:
+        """在已召回候选上叠加反馈调整分；阈值仍按原始分判断，防止绕过证据门槛。"""
+        if not self.feedback.enabled or not candidates:
+            return candidates
+        boosts = self.feedback.boosts([item.document.id for item in candidates])
+        if not boosts:
+            return candidates
+        for item in candidates:
+            boost = boosts.get(item.document.id, 0.0)
+            item.feedback_boost = boost
+            item.adjusted_score = max(0.0, min(1.0, item.final_score + boost))
+        return sorted(candidates, key=lambda item: (-item.adjusted_score, str(item.chunk.id)))
+
     def _accept(self, candidates: list[Candidate], limit: int) -> list[Candidate]:
         accepted: list[Candidate] = []
         per_document: dict[uuid.UUID, int] = {}
@@ -202,6 +220,7 @@ class SearchService:
         chunk, document = candidate.chunk, candidate.document
         sources = candidate.sources or set()
         match_type = "hybrid" if len(sources) == 2 else (next(iter(sources)) if sources else "vector")
+        final_score = candidate.adjusted_score if candidate.feedback_boost else candidate.final_score
         return SearchResult(
             chunk_id=chunk.id, document_id=document.id, document_name=document.original_name,
             extension=document.extension, sequence_number=chunk.sequence_number, content=chunk.content,
@@ -209,7 +228,8 @@ class SearchService:
             sheet_name=chunk.sheet_name, row_start=chunk.row_start, row_end=chunk.row_end,
             section_path=chunk.section_path, ocr_confidence=chunk.ocr_confidence, match_type=match_type,
             keyword_score=candidate.keyword_score, vector_score=candidate.vector_score,
-            fusion_score=candidate.fusion_score, rerank_score=candidate.rerank_score, final_score=candidate.final_score,
+            fusion_score=candidate.fusion_score, rerank_score=candidate.rerank_score,
+            final_score=final_score, base_score=candidate.final_score, feedback_boost=candidate.feedback_boost,
         )
 
     @staticmethod

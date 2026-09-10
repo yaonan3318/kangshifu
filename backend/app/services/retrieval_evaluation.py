@@ -14,10 +14,11 @@ from app.services.search import SearchService
 
 
 class RetrievalEvaluationService:
-    def __init__(self, session: Session, settings: Settings):
+    def __init__(self, session: Session, settings: Settings, user=None):
         self.session = session
         self.settings = settings
-        self.search = SearchService(session, settings)
+        self.user = user
+        self.search = SearchService(session, settings, user=user)
 
     def list_cases(self) -> list[RetrievalTestCase]:
         return list(self.session.scalars(select(RetrievalTestCase).order_by(RetrievalTestCase.created_at.desc())))

@@ -169,7 +169,7 @@ function ensureTurns(sessionId: string): AnswerTurn[] {
   return sessionCache[sessionId]
 }
 
-function dbSourceToUi(source: { citation_number: number; document_id: string; chunk_id: string; document_name: string; content_snapshot: string; location_snapshot: Record<string, unknown>; score?: number | null; available: boolean; status: string }): CitationSource {
+function dbSourceToUi(source: { citation_number: number; document_id: string; chunk_id: string; document_name: string; content_snapshot: string | null; location_snapshot: Record<string, unknown>; score?: number | null; available: boolean; status: string; message?: string | null }): CitationSource {
   const location = source.location_snapshot
   const locationText = (typeof location.text === 'string' && location.text) || '片段内容'
   return {
@@ -182,6 +182,7 @@ function dbSourceToUi(source: { citation_number: number; document_id: string; ch
     score: source.score ?? null,
     available: source.available,
     status: (source.status as CitationSource['status']) || 'ACTIVE',
+    message: source.message ?? null,
     meta: source.location_snapshot,
   }
 }

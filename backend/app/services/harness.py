@@ -16,12 +16,13 @@ from app.harness.types import PreparedOperation, ToolResult
 from app.llm import DeepSeekClient, GenerationMessage, LlmError, OllamaClient
 from app.models import ApprovalStatus, HarnessApproval, HarnessStep, HarnessStepStatus, HarnessTask, HarnessTaskStatus
 from app.schemas.answer import AnswerEvent, AnswerProvider, AnswerRequest, KnowledgeScope
+from app.services.audit import record as audit_record
 from app.services.harness_approvals import ApprovalService
 
 
 class HarnessService:
-    def __init__(self, session: Session, settings: Settings):
-        self.session, self.settings = session, settings
+    def __init__(self, session: Session, settings: Settings, user=None):
+        self.session, self.settings, self.user = session, settings, user
         self.registry = build_tool_registry(session, settings)
         self.planner = HarnessPlanner(OllamaClient(settings))
         self.deepseek = DeepSeekClient(settings)
@@ -113,6 +114,11 @@ class HarnessService:
             validated = self.registry.validate(tool.name, arguments)
             step = HarnessStep(task_id=task.id, sequence_number=task.current_step, status=HarnessStepStatus.RUNNING, tool_name=tool.name, reason=decision.reason, arguments=validated.model_dump())
             self.session.add(step); self.session.commit(); self.session.refresh(step)
+            audit_record(
+                self.session, "harness_tool_requested", user=self.user,
+                target_type="harness_task", target_id=task.id,
+                detail={"tool": tool.name, "arguments": validated.model_dump()},
+            )
             yield AnswerEvent(type="tool_requested", task_id=task.id, step=task.current_step, tool=tool.name, tool_arguments=validated.model_dump(), tool_result={"reason": decision.reason})
             yield AnswerEvent(type="tool_running", task_id=task.id, step=task.current_step, tool=tool.name)
             started = time.monotonic()

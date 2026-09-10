@@ -98,11 +98,12 @@ export interface CitationSource {
   document_id: string
   chunk_id: string
   document_name: string
-  content: string
+  content: string | null
   location_text: string
   score?: number | null
   available: boolean
-  status: 'ACTIVE' | 'DISABLED' | 'DELETED'
+  status: 'ACTIVE' | 'DISABLED' | 'DELETED' | 'FORBIDDEN'
+  message?: string | null
   meta?: Record<string, unknown>
 }
 

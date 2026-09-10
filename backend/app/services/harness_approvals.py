@@ -9,6 +9,7 @@ from app.config import Settings
 from app.harness.kubernetes import KubectlClient, KubectlError
 from app.harness.types import PreparedOperation
 from app.models import ApprovalStatus, HarnessApproval, HarnessStep, HarnessStepStatus, HarnessTask, HarnessTaskStatus
+from app.services.audit import record as audit_record
 
 
 class ApprovalService:
@@ -44,6 +45,11 @@ class ApprovalService:
             step = self.session.get(HarnessStep, approval.step_id)
             if step: step.status = HarnessStepStatus.FAILED
             self.session.commit()
+            audit_record(
+                self.session, "harness_write_failed", target_type="harness_approval",
+                target_id=approval.id, detail={"tool": approval.tool_name, "target": approval.target},
+                success=False, error_code="HARNESS_WRITE_FAILED",
+            )
             return approval
         approval.status = ApprovalStatus.EXECUTED
         approval.execution_result = {"success": True, "output": result}
@@ -51,6 +57,10 @@ class ApprovalService:
         step = self.session.get(HarnessStep, approval.step_id)
         if step: step.status = HarnessStepStatus.SUCCEEDED
         self.session.commit(); self.session.refresh(approval)
+        audit_record(
+            self.session, "harness_write_succeeded", target_type="harness_approval",
+            target_id=approval.id, detail={"tool": approval.tool_name, "target": approval.target},
+        )
         return approval
 
     def reject(self, approval_id: uuid.UUID, reason: str | None) -> HarnessApproval:

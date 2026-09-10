@@ -11,9 +11,9 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.db import get_session
-from app.models import DocumentAcl, DocumentVisibility
+from app.models import Department, DocumentAcl, DocumentVisibility, Role, User
 from app.models.document import DocumentStatus
-from app.schemas.documents import DocumentChunkResponse, DocumentContentResponse, DocumentDeleteRequest, DocumentFilters, DocumentListResponse, DocumentResponse, DocumentUpdateRequest
+from app.schemas.documents import DocumentChunkResponse, DocumentContentResponse, DocumentDeleteRequest, DocumentExternalPolicyRequest, DocumentFilters, DocumentListResponse, DocumentResponse, DocumentUpdateRequest
 from app.services.audit import record as audit_record
 from app.services.documents import DocumentService
 from app.services.managed_storage import ManagedStorage
@@ -133,11 +133,20 @@ def get_document_content(
 @router.post("/{document_id}/reprocess", response_model=DocumentResponse)
 def reprocess_document(
     document_id: uuid.UUID,
+    request: Request,
     service: Annotated[DocumentService, Depends(get_document_service)],
     confirm_overwrite: bool = False,
 ) -> DocumentResponse:
     """清除旧片段并重新排队解析，适用于修复 OCR/解析配置后重试。"""
-    return document_response(service.reprocess(document_id, confirm_overwrite), service)
+    document = service.reprocess(document_id, confirm_overwrite)
+    audit_record(
+        service.session, "document_reprocess", user=getattr(request.state, "auth_user", None),
+        target_type="document", target_id=document_id,
+        detail={"confirm_overwrite": confirm_overwrite},
+        ip_address=request.client.host if request.client else None,
+        request_id=request.headers.get("X-Request-ID"),
+    )
+    return document_response(document, service)
 
 
 @router.get("/{document_id}/download")
@@ -217,7 +226,36 @@ def set_document_access(
     audit_record(
         service.session, "document_access_change", user=getattr(request.state, "auth_user", None),
         target_type="document", target_id=document_id,
-        detail={"visibility": body.visibility}, ip_address=request.client.host if request.client else None,
+        detail={
+            "visibility": body.visibility,
+            "acl_count": len(acl) if acl is not None else None,
+        },
+        ip_address=request.client.host if request.client else None,
+        request_id=request.headers.get("X-Request-ID"),
+    )
+    return document_response(document, service)
+
+
+@router.patch("/{document_id}/external-policy", response_model=DocumentResponse)
+def set_document_external_policy(
+    document_id: uuid.UUID,
+    body: DocumentExternalPolicyRequest,
+    request: Request,
+    service: Annotated[DocumentService, Depends(get_document_service)],
+) -> DocumentResponse:
+    """设置敏感级别与是否允许发送外部大模型；仅影响 DeepSeek，不影响本地千问。"""
+    document = service.set_external_policy(
+        document_id, body.sensitivity_level, body.external_llm_allowed,
+    )
+    audit_record(
+        service.session, "document_external_policy_change", user=getattr(request.state, "auth_user", None),
+        target_type="document", target_id=document_id,
+        detail={
+            "sensitivity_level": body.sensitivity_level,
+            "external_llm_allowed": body.external_llm_allowed,
+        },
+        ip_address=request.client.host if request.client else None,
+        request_id=request.headers.get("X-Request-ID"),
     )
     return document_response(document, service)
 
@@ -228,10 +266,24 @@ def get_document_acl(
     session: Annotated[Session, Depends(get_session)],
     service: Annotated[DocumentService, Depends(get_document_service)],
 ) -> dict:
-    """读取文档访问控制条目（读取前先校验文档可见性）。"""
-    service.get(document_id)
+    """读取文档访问控制条目；必须拥有 MANAGE 权限，且返回可读的对象名称。"""
+    service.get_managed(document_id)
     rows = session.scalars(select(DocumentAcl).where(DocumentAcl.document_id == document_id)).all()
+    names: dict[tuple[str, uuid.UUID], str] = {}
+    department_ids = [item.subject_id for item in rows if item.subject_type.value == "DEPARTMENT"]
+    role_ids = [item.subject_id for item in rows if item.subject_type.value == "ROLE"]
+    user_ids = [item.subject_id for item in rows if item.subject_type.value == "USER"]
+    if department_ids:
+        for item in session.scalars(select(Department).where(Department.id.in_(department_ids))):
+            names[("DEPARTMENT", item.id)] = item.name
+    if role_ids:
+        for item in session.scalars(select(Role).where(Role.id.in_(role_ids))):
+            names[("ROLE", item.id)] = item.name
+    if user_ids:
+        for item in session.scalars(select(User).where(User.id.in_(user_ids))):
+            names[("USER", item.id)] = item.display_name or item.username
     return {"items": [{
         "id": str(item.id), "subject_type": item.subject_type.value,
-        "subject_id": str(item.subject_id), "permission": item.permission.value,
+        "subject_id": str(item.subject_id), "subject_name": names.get((item.subject_type.value, item.subject_id)),
+        "permission": item.permission.value,
     } for item in rows]}

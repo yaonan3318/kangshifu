@@ -23,11 +23,12 @@ export interface ChatSourceSnapshot {
   document_id: string
   chunk_id: string
   document_name: string
-  content_snapshot: string
+  content_snapshot: string | null
   location_snapshot: SourceLocation
   score?: number | null
   available: boolean
-  status: 'ACTIVE' | 'DISABLED' | 'DELETED'
+  status: 'ACTIVE' | 'DISABLED' | 'DELETED' | 'FORBIDDEN'
+  message?: string | null
 }
 
 export interface ChatMessageRecord {

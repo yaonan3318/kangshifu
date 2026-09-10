@@ -15,11 +15,12 @@ class ChatSourceSnapshot(BaseModel):
     document_id: uuid.UUID
     chunk_id: uuid.UUID
     document_name: str
-    content_snapshot: str
+    content_snapshot: str | None = None
     location_snapshot: dict
     score: float | None = None
     available: bool
-    status: str  # ACTIVE / DISABLED / DELETED
+    status: str  # ACTIVE / DISABLED / DELETED / FORBIDDEN
+    message: str | None = None
 
 
 class ChatMessageOut(BaseModel):

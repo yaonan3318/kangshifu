@@ -1,0 +1,213 @@
+<script setup lang="ts">
+import { onMounted, reactive, ref } from 'vue'
+import {
+  createRole, disableRole, enableRole, getRoleDocuments, listRoles, setRoleUsers, updateRole,
+} from '../../api/identity'
+import { listUsers } from '../../api/identity'
+import type { AdminUser, RoleDocument, RoleRecord } from '../../types/identity'
+import { errorMessage } from '../../utils/errors'
+
+const roles = ref<RoleRecord[]>([])
+const users = ref<AdminUser[]>([])
+const loading = ref(false)
+const error = ref('')
+const notice = ref('')
+const selectedId = ref('')
+const creating = ref(false)
+const saving = ref(false)
+const documents = ref<RoleDocument[]>([])
+const selectedUserIds = ref<string[]>([])
+const showDocuments = ref(false)
+
+const form = reactive({ name: '', description: '', enabled: true })
+
+async function refresh() {
+  loading.value = true
+  error.value = ''
+  try {
+    const [roleResult, userResult] = await Promise.all([listRoles(), listUsers({ page_size: 100 })])
+    roles.value = roleResult.items
+    users.value = userResult.items
+    if (selectedId.value && !roles.value.some((role) => role.id === selectedId.value)) selectedId.value = ''
+  } catch (reason) {
+    error.value = errorMessage(reason, '无法读取角色')
+  } finally {
+    loading.value = false
+  }
+}
+
+function selectRole(role: RoleRecord) {
+  creating.value = false
+  selectedId.value = role.id
+  form.name = role.name
+  form.description = role.description ?? ''
+  form.enabled = role.enabled
+  showDocuments.value = false
+  documents.value = []
+  void loadRoleUsers(role)
+}
+
+async function loadRoleUsers(role: RoleRecord) {
+  try {
+    const result = await listUsers({ role_id: role.id, page_size: 100 })
+    selectedUserIds.value = result.items.map((user) => user.id)
+  } catch {
+    selectedUserIds.value = []
+  }
+}
+
+function startCreate() {
+  selectedId.value = ''
+  creating.value = true
+  form.name = ''
+  form.description = ''
+  form.enabled = true
+  selectedUserIds.value = []
+  showDocuments.value = false
+  documents.value = []
+}
+
+function toggleUser(id: string) {
+  const index = selectedUserIds.value.indexOf(id)
+  if (index >= 0) selectedUserIds.value.splice(index, 1)
+  else selectedUserIds.value.push(id)
+}
+
+async function save() {
+  if (!form.name.trim()) { error.value = '请填写角色名称'; return }
+  saving.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    if (creating.value) {
+      const role = await createRole({ name: form.name.trim(), description: form.description.trim() || null, enabled: form.enabled })
+      selectedId.value = role.id
+      creating.value = false
+      notice.value = '角色已创建'
+    } else if (selectedId.value) {
+      await updateRole(selectedId.value, { name: form.name.trim(), description: form.description.trim() || null, enabled: form.enabled })
+      notice.value = '角色已更新'
+    }
+    await refresh()
+  } catch (reason) {
+    error.value = errorMessage(reason, '保存失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function saveUsers() {
+  if (!selectedId.value) return
+  try {
+    await setRoleUsers(selectedId.value, selectedUserIds.value)
+    notice.value = '角色成员已更新'
+    await refresh()
+  } catch (reason) {
+    error.value = errorMessage(reason, '分配用户失败')
+  }
+}
+
+async function toggleEnabled(role: RoleRecord) {
+  const action = role.enabled ? '停用' : '启用'
+  if (role.enabled && !window.confirm(`停用“${role.name}”后，该角色不再参与权限判断，历史 ACL 保留。确定停用？`)) return
+  try {
+    if (role.enabled) await disableRole(role.id)
+    else await enableRole(role.id)
+    notice.value = `角色已${action}`
+    await refresh()
+  } catch (reason) {
+    error.value = errorMessage(reason, `${action}失败`)
+  }
+}
+
+async function loadDocuments() {
+  if (!selectedId.value) return
+  try {
+    const result = await getRoleDocuments(selectedId.value)
+    documents.value = result.items
+    showDocuments.value = true
+  } catch (reason) {
+    error.value = errorMessage(reason, '无法读取角色文档')
+  }
+}
+
+onMounted(refresh)
+</script>
+
+<template>
+  <main class="app-shell">
+    <header class="hero">
+      <p class="eyebrow">SYSTEM · ROLES</p>
+      <h1>角色管理</h1>
+      <p>角色用于控制文档访问范围。停用角色不会删除历史授权，重新启用后恢复生效。</p>
+    </header>
+    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="notice" class="assistant-hint">{{ notice }}</p>
+
+    <div class="assistant-grid">
+      <section class="assistant-panel">
+        <div class="section-heading">
+          <div><p class="eyebrow">ROLES</p><h2>角色列表</h2></div>
+          <button type="button" class="primary-action" @click="startCreate">＋ 新建角色</button>
+        </div>
+        <p v-if="loading" class="assistant-hint">正在加载…</p>
+        <div v-else class="admin-table-wrap">
+          <table class="admin-table">
+            <thead><tr><th>角色名称</th><th>描述</th><th>用户数</th><th>文档数</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr v-for="role in roles" :key="role.id" :class="{ selected: role.id === selectedId }">
+                <td>{{ role.name }}</td>
+                <td>{{ role.description || '—' }}</td>
+                <td>{{ role.user_count }}</td>
+                <td>{{ role.document_count }}</td>
+                <td><span :class="role.enabled ? 'is-active' : 'is-stale'">{{ role.enabled ? '启用' : '停用' }}</span></td>
+                <td>{{ new Date(role.created_at).toLocaleDateString('zh-CN') }}</td>
+                <td class="row-actions">
+                  <button type="button" @click="selectRole(role)">编辑</button>
+                  <button type="button" @click="toggleEnabled(role)">{{ role.enabled ? '停用' : '启用' }}</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="assistant-panel">
+        <div class="section-heading"><div><p class="eyebrow">EDITOR</p><h2>{{ creating ? '新建角色' : (selectedId ? '编辑角色' : '角色详情') }}</h2></div></div>
+        <form v-if="creating || selectedId" class="assistant-form" @submit.prevent="save">
+          <label class="form-row">角色名称<input v-model="form.name" maxlength="255"></label>
+          <label class="form-row">描述<textarea v-model="form.description" rows="2" maxlength="500"></textarea></label>
+          <label class="assistant-checkboxes"><input v-model="form.enabled" type="checkbox">启用角色</label>
+          <div class="form-actions">
+            <button type="button" class="secondary-action" @click="selectedId = ''; creating = false">取消</button>
+            <button type="submit" :disabled="saving">{{ saving ? '保存中…' : '保存' }}</button>
+          </div>
+        </form>
+
+        <div v-if="selectedId && !creating" style="margin-top:18px">
+          <p class="assistant-hint" style="margin:0 0 6px">分配用户</p>
+          <div class="assistant-checkboxes">
+            <label v-for="user in users" :key="user.id">
+              <input type="checkbox" :checked="selectedUserIds.includes(user.id)" @change="toggleUser(user.id)">
+              {{ user.display_name }}（{{ user.username }}）
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="secondary-action" @click="loadDocuments">查看可访问文档</button>
+            <button type="button" @click="saveUsers">保存成员</button>
+          </div>
+        </div>
+
+        <div v-if="showDocuments" style="margin-top:14px">
+          <p class="assistant-hint" style="margin:0 0 6px">该角色可访问的文档</p>
+          <p v-if="!documents.length" class="assistant-hint">暂无通过该角色授权的文档</p>
+          <ul v-else class="governance-list">
+            <li v-for="doc in documents" :key="doc.document_id">
+              <div><strong>{{ doc.document_name }}</strong><small>{{ doc.visibility }} · {{ doc.permission }}</small></div>
+            </li>
+          </ul>
+        </div>
+      </section>
+    </div>
+  </main>
+</template>

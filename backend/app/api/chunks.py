@@ -3,12 +3,14 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
+from app.api.auth import current_user
 from app.config import Settings, get_settings
 from app.db import get_session
 from app.schemas.chunks import ChunkListResponse, ChunkResponse, ChunkUpdateRequest
+from app.services.audit import record as audit_record
 from app.services.chunks import ChunkService
 
 
@@ -16,10 +18,18 @@ router = APIRouter(prefix="/api", tags=["chunks"])
 
 
 def get_service(
+    request: Request,
     session: Annotated[Session, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ChunkService:
-    return ChunkService(session, settings)
+    return ChunkService(session, settings, user=current_user(request))
+
+
+def _meta(request: Request) -> dict:
+    return {
+        "ip_address": request.client.host if request.client else None,
+        "request_id": request.headers.get("X-Request-ID"),
+    }
 
 
 @router.get("/documents/{document_id}/chunks", response_model=ChunkListResponse)
@@ -29,25 +39,55 @@ def list_chunks(document_id: uuid.UUID, service: Annotated[ChunkService, Depends
 
 
 @router.patch("/chunks/{chunk_id}", response_model=ChunkResponse)
-def update_chunk(chunk_id: uuid.UUID, body: ChunkUpdateRequest, service: Annotated[ChunkService, Depends(get_service)]):
-    return ChunkResponse.model_validate(service.update_content(chunk_id, body.content))
+def update_chunk(chunk_id: uuid.UUID, body: ChunkUpdateRequest, request: Request, service: Annotated[ChunkService, Depends(get_service)]):
+    chunk = service.update_content(chunk_id, body.content)
+    audit_record(
+        service.session, "chunk_updated", user=current_user(request),
+        target_type="document_chunk", target_id=chunk.id,
+        detail={"document_id": str(chunk.document_id)}, **_meta(request),
+    )
+    return ChunkResponse.model_validate(chunk)
 
 
 @router.post("/chunks/{chunk_id}/enable", response_model=ChunkResponse)
-def enable_chunk(chunk_id: uuid.UUID, service: Annotated[ChunkService, Depends(get_service)]):
-    return ChunkResponse.model_validate(service.set_enabled(chunk_id, True))
+def enable_chunk(chunk_id: uuid.UUID, request: Request, service: Annotated[ChunkService, Depends(get_service)]):
+    chunk = service.set_enabled(chunk_id, True)
+    audit_record(
+        service.session, "chunk_updated", user=current_user(request),
+        target_type="document_chunk", target_id=chunk.id,
+        detail={"document_id": str(chunk.document_id), "enabled": True}, **_meta(request),
+    )
+    return ChunkResponse.model_validate(chunk)
 
 
 @router.post("/chunks/{chunk_id}/disable", response_model=ChunkResponse)
-def disable_chunk(chunk_id: uuid.UUID, service: Annotated[ChunkService, Depends(get_service)]):
-    return ChunkResponse.model_validate(service.set_enabled(chunk_id, False))
+def disable_chunk(chunk_id: uuid.UUID, request: Request, service: Annotated[ChunkService, Depends(get_service)]):
+    chunk = service.set_enabled(chunk_id, False)
+    audit_record(
+        service.session, "chunk_updated", user=current_user(request),
+        target_type="document_chunk", target_id=chunk.id,
+        detail={"document_id": str(chunk.document_id), "enabled": False}, **_meta(request),
+    )
+    return ChunkResponse.model_validate(chunk)
 
 
 @router.post("/chunks/{chunk_id}/reindex", response_model=ChunkResponse)
-def reindex_chunk(chunk_id: uuid.UUID, service: Annotated[ChunkService, Depends(get_service)]):
-    return ChunkResponse.model_validate(service.reindex(chunk_id))
+def reindex_chunk(chunk_id: uuid.UUID, request: Request, service: Annotated[ChunkService, Depends(get_service)]):
+    chunk = service.reindex(chunk_id)
+    audit_record(
+        service.session, "chunk_updated", user=current_user(request),
+        target_type="document_chunk", target_id=chunk.id,
+        detail={"document_id": str(chunk.document_id), "reindexed": True}, **_meta(request),
+    )
+    return ChunkResponse.model_validate(chunk)
 
 
 @router.post("/chunks/{chunk_id}/restore-original", response_model=ChunkResponse)
-def restore_chunk(chunk_id: uuid.UUID, service: Annotated[ChunkService, Depends(get_service)]):
-    return ChunkResponse.model_validate(service.restore_original(chunk_id))
+def restore_chunk(chunk_id: uuid.UUID, request: Request, service: Annotated[ChunkService, Depends(get_service)]):
+    chunk = service.restore_original(chunk_id)
+    audit_record(
+        service.session, "chunk_updated", user=current_user(request),
+        target_type="document_chunk", target_id=chunk.id,
+        detail={"document_id": str(chunk.document_id), "restored": True}, **_meta(request),
+    )
+    return ChunkResponse.model_validate(chunk)

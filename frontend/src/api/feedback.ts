@@ -25,11 +25,35 @@ export async function submitFeedback(body: SubmitFeedbackInput): Promise<{ ok: b
   }))
 }
 
-export const listFeedback = async (resolved?: boolean, page = 1): Promise<FeedbackListResponse> => {
-  const params = new URLSearchParams({ page: String(page), page_size: '30' })
-  if (resolved !== undefined) params.set('resolved', resolved ? 'true' : 'false')
+export interface FeedbackQuery {
+  rating?: string
+  resolved?: boolean
+  assistant_id?: string
+  username?: string
+  created_from?: string
+  created_to?: string
+  no_answer?: boolean
+  document_id?: string
+  reason?: string
+  page?: number
+  page_size?: number
+}
+
+export const listFeedback = async (query: FeedbackQuery = {}): Promise<FeedbackListResponse> => {
+  const params = new URLSearchParams({ page: String(query.page ?? 1), page_size: String(query.page_size ?? 30) })
+  if (query.rating) params.set('rating', query.rating)
+  if (query.resolved !== undefined) params.set('resolved', query.resolved ? 'true' : 'false')
+  if (query.assistant_id) params.set('assistant_id', query.assistant_id)
+  if (query.username) params.set('username', query.username)
+  if (query.created_from) params.set('created_from', query.created_from)
+  if (query.created_to) params.set('created_to', query.created_to)
+  if (query.no_answer !== undefined) params.set('no_answer', String(query.no_answer))
+  if (query.document_id) params.set('document_id', query.document_id)
+  if (query.reason) params.set('reason', query.reason)
   return parse(await fetch(`/api/feedback?${params}`))
 }
+
+export const listFeedbackReasons = async (): Promise<{ items: string[] }> => parse(await fetch('/api/feedback/reasons'))
 
 export const resolveFeedback = async (id: string, note: string): Promise<{ ok: boolean }> =>
   parse(await fetch(`/api/feedback/${id}/resolve`, {

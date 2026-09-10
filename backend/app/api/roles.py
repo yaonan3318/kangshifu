@@ -1,0 +1,155 @@
+"""角色管理 API：角色 CRUD、启停与成员分配（仅超级管理员）。"""
+
+import uuid
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.api.auth import current_user
+from app.db import get_session
+from app.models import Document, DocumentAcl, SubjectType
+from app.schemas.identity import RoleCreateRequest, RoleListResponse, RoleOut, RoleUpdateRequest, RoleUsersRequest
+from app.services import identity
+from app.services.audit import record as audit_record
+from app.services.permissions import require_admin
+
+router = APIRouter(prefix="/api/roles", tags=["roles"])
+
+
+def _request_meta(request: Request) -> dict:
+    return {
+        "ip_address": request.client.host if request.client else None,
+        "request_id": request.headers.get("X-Request-ID"),
+    }
+
+
+def _role_out(session: Session, role) -> RoleOut:
+    return RoleOut(**identity.role_payload(session, role))
+
+
+@router.get("", response_model=RoleListResponse)
+def list_roles(
+    request: Request,
+    session: Annotated[Session, Depends(get_session)],
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+) -> RoleListResponse:
+    require_admin(current_user(request))
+    items, total = identity.list_roles(session, page=page, page_size=page_size)
+    return RoleListResponse(items=[RoleOut(**item) for item in items], page=page, page_size=page_size, total=total)
+
+
+@router.post("", response_model=RoleOut, status_code=201)
+def create_role(
+    body: RoleCreateRequest,
+    request: Request,
+    session: Annotated[Session, Depends(get_session)],
+) -> RoleOut:
+    admin = require_admin(current_user(request))
+    role = identity.create_role(session, name=body.name, description=body.description, enabled=body.enabled)
+    audit_record(
+        session, "role_created", user=admin, target_type="role", target_id=role.id,
+        detail={"name": role.name}, **_request_meta(request),
+    )
+    return _role_out(session, role)
+
+
+@router.get("/{role_id}", response_model=RoleOut)
+def get_role(
+    role_id: uuid.UUID,
+    request: Request,
+    session: Annotated[Session, Depends(get_session)],
+) -> RoleOut:
+    require_admin(current_user(request))
+    return _role_out(session, identity.load_role(session, role_id))
+
+
+@router.patch("/{role_id}", response_model=RoleOut)
+def update_role(
+    role_id: uuid.UUID,
+    body: RoleUpdateRequest,
+    request: Request,
+    session: Annotated[Session, Depends(get_session)],
+) -> RoleOut:
+    admin = require_admin(current_user(request))
+    role = identity.update_role(
+        session, role_id, name=body.name, description=body.description,
+        description_set="description" in body.model_fields_set, enabled=body.enabled,
+    )
+    audit_record(
+        session, "role_updated", user=admin, target_type="role", target_id=role.id,
+        detail={"fields": sorted(body.model_fields_set)}, **_request_meta(request),
+    )
+    return _role_out(session, role)
+
+
+@router.post("/{role_id}/enable", response_model=RoleOut)
+def enable_role(
+    role_id: uuid.UUID,
+    request: Request,
+    session: Annotated[Session, Depends(get_session)],
+) -> RoleOut:
+    admin = require_admin(current_user(request))
+    role = identity.set_role_enabled(session, role_id, True)
+    audit_record(
+        session, "role_enabled", user=admin, target_type="role", target_id=role.id,
+        detail={"name": role.name}, **_request_meta(request),
+    )
+    return _role_out(session, role)
+
+
+@router.post("/{role_id}/disable", response_model=RoleOut)
+def disable_role(
+    role_id: uuid.UUID,
+    request: Request,
+    session: Annotated[Session, Depends(get_session)],
+) -> RoleOut:
+    admin = require_admin(current_user(request))
+    role = identity.set_role_enabled(session, role_id, False)
+    audit_record(
+        session, "role_disabled", user=admin, target_type="role", target_id=role.id,
+        detail={"name": role.name}, **_request_meta(request),
+    )
+    return _role_out(session, role)
+
+
+@router.put("/{role_id}/users", response_model=RoleOut)
+def set_role_users(
+    role_id: uuid.UUID,
+    body: RoleUsersRequest,
+    request: Request,
+    session: Annotated[Session, Depends(get_session)],
+) -> RoleOut:
+    admin = require_admin(current_user(request))
+    role = identity.set_role_users(session, role_id, body.user_ids)
+    audit_record(
+        session, "role_assignment_changed", user=admin, target_type="role", target_id=role.id,
+        detail={"user_ids": [str(item) for item in body.user_ids]}, **_request_meta(request),
+    )
+    return _role_out(session, role)
+
+
+@router.get("/{role_id}/documents")
+def role_documents(
+    role_id: uuid.UUID,
+    request: Request,
+    session: Annotated[Session, Depends(get_session)],
+) -> dict:
+    require_admin(current_user(request))
+    identity.load_role(session, role_id)
+    rows = session.execute(
+        select(Document.id, Document.original_name, Document.visibility, DocumentAcl.permission)
+        .join(DocumentAcl, DocumentAcl.document_id == Document.id)
+        .where(DocumentAcl.subject_type == SubjectType.ROLE, DocumentAcl.subject_id == role_id)
+        .order_by(Document.original_name)
+    ).all()
+    return {"items": [
+        {
+            "document_id": row[0], "document_name": row[1],
+            "visibility": row[2].value if hasattr(row[2], "value") else row[2],
+            "permission": row[3].value if hasattr(row[3], "value") else row[3],
+        }
+        for row in rows
+    ]}

@@ -11,8 +11,9 @@ from sqlalchemy.orm import Session, selectinload
 from app.errors import DocumentAlreadyProcessing, DocumentNotFound, DuplicateDocument
 from app.errors import AppError
 from app.models import (
-    AclPermission, DEFAULT_KNOWLEDGE_BASE_ID, Document, DocumentAcl, DocumentChunk, DocumentStatus,
-    DocumentVisibility, JobStatus, JobType, KnowledgeBase, ProcessingJob, SubjectType, Tag,
+    AclPermission, DEFAULT_KNOWLEDGE_BASE_ID, Department, Document, DocumentAcl, DocumentChunk,
+    DocumentStatus, DocumentVisibility, JobStatus, JobType, KnowledgeBase, ProcessingJob, Role,
+    SubjectType, Tag, User,
 )
 from app.schemas.documents import DocumentFilters, DocumentUpdateRequest
 from app.services.file_types import detect_allowed_type
@@ -124,6 +125,12 @@ class DocumentService:
         self._check_read(document)
         return document
 
+    def get_managed(self, document_id: uuid.UUID, include_deleted: bool = False) -> Document:
+        """读取文档并要求 MANAGE 权限，供 ACL 读取等管理入口使用。"""
+        document = self.get(document_id, include_deleted=include_deleted)
+        self._check_manage(document)
+        return document
+
     def delete(self, document_id: uuid.UUID, reason: str | None = None) -> None:
         document = self.get(document_id)
         self._check_manage(document)
@@ -202,6 +209,31 @@ class DocumentService:
     def chunk_count(self, document_id: uuid.UUID) -> int:
         return self.session.scalar(select(func.count()).select_from(DocumentChunk).where(DocumentChunk.document_id == document_id)) or 0
 
+    def _validate_acl(self, acl: list[dict]) -> list[tuple[SubjectType, uuid.UUID, AclPermission]]:
+        """校验授权对象存在且启用，并按 (类型, 对象) 去重后保留最高权限。"""
+        merged: dict[tuple[SubjectType, uuid.UUID], AclPermission] = {}
+        order: list[tuple[SubjectType, uuid.UUID]] = []
+        for entry in acl:
+            try:
+                subject_type = SubjectType(entry.get("subject_type"))
+            except ValueError as exc:
+                raise AppError("ACL_SUBJECT_TYPE_INVALID", "授权对象类型不正确", 422) from exc
+            subject_id = uuid.UUID(str(entry.get("subject_id")))
+            permission = AclPermission(entry.get("permission") or "READ")
+            model = {SubjectType.DEPARTMENT: Department, SubjectType.ROLE: Role, SubjectType.USER: User}[subject_type]
+            subject = self.session.get(model, subject_id)
+            if subject is None:
+                raise AppError("ACL_SUBJECT_NOT_FOUND", "授权对象不存在", 404, {"subject_id": str(subject_id)})
+            if not subject.enabled:
+                raise AppError("ACL_SUBJECT_DISABLED", "不能授权给已停用的对象", 409, {"subject_id": str(subject_id)})
+            key = (subject_type, subject_id)
+            if key not in merged:
+                order.append(key)
+                merged[key] = permission
+            elif permission == AclPermission.MANAGE:
+                merged[key] = AclPermission.MANAGE
+        return [(subject_type, subject_id, merged[(subject_type, subject_id)]) for subject_type, subject_id in order]
+
     def set_access(
         self, document_id: uuid.UUID,
         visibility: DocumentVisibility | None = None,
@@ -210,19 +242,30 @@ class DocumentService:
         """设置文档可见级别与访问控制表；只允许上传人、管理员或被授予 MANAGE 的用户。"""
         document = self.get(document_id)
         self._check_manage(document)
+        entries = self._validate_acl(acl) if acl is not None else None
         if visibility is not None:
             document.visibility = visibility
-        if acl is not None:
+        if entries is not None:
             self.session.execute(
                 delete(DocumentAcl).where(DocumentAcl.document_id == document.id)
             )
-            for entry in acl:
-                subject_type = SubjectType(entry.get("subject_type"))
-                permission = AclPermission(entry.get("permission") or "READ")
+            for subject_type, subject_id, permission in entries:
                 self.session.add(DocumentAcl(
                     document_id=document.id, subject_type=subject_type,
-                    subject_id=uuid.UUID(str(entry.get("subject_id"))), permission=permission,
+                    subject_id=subject_id, permission=permission,
                 ))
+        self.session.commit()
+        self.session.refresh(document)
+        return self.get(document.id)
+
+    def set_external_policy(
+        self, document_id: uuid.UUID, sensitivity_level: str, external_llm_allowed: bool,
+    ) -> Document:
+        """设置敏感级别与外部模型外发策略；不影响本地千问。"""
+        document = self.get(document_id)
+        self._check_manage(document)
+        document.sensitivity_level = sensitivity_level
+        document.external_llm_allowed = external_llm_allowed
         self.session.commit()
         self.session.refresh(document)
         return self.get(document.id)

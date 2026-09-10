@@ -75,6 +75,8 @@ async def answer_stream(
     # Harness 可执行运维工具，权限闭环前仅限管理员使用，避免绕过文档权限。
     if body.use_harness and (chat_user is None or not chat_user.is_super_admin):
         raise AppError("HARNESS_FORBIDDEN", "Harness 功能仅限管理员使用", 403)
+    ip_address = request.client.host if request.client else None
+    request_id = request.headers.get("X-Request-ID")
     chat = ChatService(session, user=chat_user)
     if body.session_id is not None:
         try:
@@ -99,7 +101,7 @@ async def answer_stream(
         finalized = False
         disconnected = False
         stream = (
-            HarnessService(service.search_service.session, service.settings).start(body)
+            HarnessService(service.search_service.session, service.settings, user=chat_user).start(body)
             if is_harness
             else service.stream(body)
         )
@@ -121,6 +123,29 @@ async def answer_stream(
                     text_parts.clear()
                 elif event.type == "delta" and event.text:
                     text_parts.append(event.text)
+                elif event.type == "stage" and event.stage == "deepseek_enhancing":
+                    audit_record(
+                        session, "external_llm_requested", user=chat_user,
+                        target_type="chat_session", target_id=prepared.id,
+                        detail={"document_ids": [str(item.document_id) for item in sources]},
+                        ip_address=ip_address, request_id=request_id,
+                    )
+                elif event.type == "warning" and event.warning is not None:
+                    if event.warning.code in ("ASSISTANT_DEEPSEEK_BLOCKED", "EXTERNAL_LLM_BLOCKED", "DEEPSEEK_NOT_CONFIGURED"):
+                        audit_record(
+                            session, "external_llm_blocked", user=chat_user,
+                            target_type="chat_session", target_id=prepared.id,
+                            detail={"reason": event.warning.code, "message": event.warning.message},
+                            ip_address=ip_address, request_id=request_id,
+                        )
+                    elif event.warning.code.startswith("DEEPSEEK_"):
+                        audit_record(
+                            session, "external_llm_failed", user=chat_user,
+                            target_type="chat_session", target_id=prepared.id,
+                            detail={"error_code": event.warning.code, "message": event.warning.message},
+                            ip_address=ip_address, success=False, error_code=event.warning.code,
+                            request_id=request_id,
+                        )
                 elif event.type == "done":
                     content = "".join(text_parts)
                     provider = _provider_value(event)
@@ -133,10 +158,14 @@ async def answer_stream(
                     )
                     if provider == ChatProvider.DEEPSEEK:
                         audit_record(
-                            session, "external_llm_call", user=chat_user,
+                            session, "external_llm_succeeded", user=chat_user,
                             target_type="chat_session", target_id=prepared.id,
-                            detail={"scope": event.scope.value if event.scope is not None else None, "provider": "DEEPSEEK"},
-                            ip_address=request.client.host if request.client else None,
+                            detail={
+                                "scope": event.scope.value if event.scope is not None else None,
+                                "provider": "DEEPSEEK",
+                                "document_ids": [str(item.document_id) for item in sources],
+                            },
+                            ip_address=ip_address, request_id=request_id,
                         )
                     finalized = True
                 elif event.type == "harness_done":

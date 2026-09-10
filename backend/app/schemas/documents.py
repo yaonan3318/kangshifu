@@ -31,6 +31,8 @@ class DocumentResponse(BaseModel):
     enabled: bool
     visibility: str
     owner_user_id: uuid.UUID | None
+    sensitivity_level: str = "INTERNAL"
+    external_llm_allowed: bool = True
     deleted_at: datetime | None
     deleted_reason: str | None
     metadata_json: dict
@@ -98,3 +100,8 @@ class DocumentUpdateRequest(BaseModel):
 
 class DocumentDeleteRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=1000)
+
+
+class DocumentExternalPolicyRequest(BaseModel):
+    sensitivity_level: str = Field(pattern="^(PUBLIC|INTERNAL|CONFIDENTIAL|RESTRICTED)$")
+    external_llm_allowed: bool

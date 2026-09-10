@@ -56,6 +56,81 @@ class P1SecurityRegressionTests(unittest.TestCase):
             chat_api,
         )
 
+    # ---- P1-9 ~ P1-15 收尾新增的边界 ----
+
+    def test_disabled_roles_are_excluded_from_permission_resolution(self) -> None:
+        permissions = source("backend/app/services/permissions.py")
+        self.assertIn("if role.enabled", permissions)
+        self.assertIn("if row is not None and row.enabled", permissions)
+
+    def test_acl_read_requires_manage(self) -> None:
+        documents = source("backend/app/api/documents.py")
+        self.assertIn("service.get_managed(document_id)", documents)
+
+    def test_acl_write_validates_subjects_and_deduplicates(self) -> None:
+        documents = source("backend/app/services/documents.py")
+        self.assertIn("def _validate_acl", documents)
+        self.assertIn("ACL_SUBJECT_DISABLED", documents)
+        self.assertIn("merged[key] = AclPermission.MANAGE", documents)
+
+    def test_password_reset_and_disable_revoke_sessions(self) -> None:
+        identity = source("backend/app/services/identity.py")
+        self.assertIn("def revoke_user_sessions", identity)
+        self.assertIn("def reset_password", identity)
+        self.assertIn("def _guard_last_super_admin", identity)
+
+    def test_historical_reference_rechecks_permission(self) -> None:
+        chat = source("backend/app/services/chat.py")
+        self.assertIn("PermissionResolver(self.session, self.user)", chat)
+        self.assertIn('"FORBIDDEN"', chat)
+
+    def test_audit_write_is_best_effort(self) -> None:
+        audit = source("backend/app/services/audit.py")
+        self.assertIn("logger.exception", audit)
+        self.assertIn("success", audit)
+        self.assertIn("request_id", audit)
+
+    def test_feedback_ranking_is_default_off_and_capped(self) -> None:
+        config = source("backend/app/config.py")
+        self.assertIn("search_feedback_ranking_enabled: bool = False", config)
+        self.assertIn("search_feedback_max_boost: float = 0.05", config)
+        ranking = source("backend/app/services/feedback_ranking.py")
+        self.assertIn("search_feedback_min_samples", ranking)
+        self.assertIn("max(-cap, min(cap, net * cap))", ranking)
+
+    def test_feedback_boost_never_bypasses_evidence_threshold(self) -> None:
+        search = source("backend/app/services/search.py")
+        self.assertIn("def _apply_feedback", search)
+        # 阈值判断仍使用未叠加反馈的 final_score。
+        self.assertIn("if item.final_score < self.settings.search_min_evidence_score", search)
+
+    def test_external_policy_blocks_sensitive_documents(self) -> None:
+        audit = source("backend/app/services/audit.py")
+        self.assertIn('SENSITIVE_LEVELS_EXTERNAL_BLOCKED = ("CONFIDENTIAL", "RESTRICTED")', audit)
+        rag = source("backend/app/services/rag.py")
+        self.assertIn("_restricted_document_ids", rag)
+
+    def test_document_chunks_use_permission_resolver(self) -> None:
+        chunks = source("backend/app/services/chunks.py")
+        self.assertIn("require_read(self.resolver, document)", chunks)
+        self.assertIn("require_manage(self.resolver, document)", chunks)
+
+    def test_new_migrations_are_linear_and_have_downgrade(self) -> None:
+        versions = ROOT / "backend/migrations/versions"
+        for filename, revision, down_revision in (
+            ("0013_identity_management.py", "0013_identity_management", "0012_answer_feedback"),
+            ("0014_audit_completion.py", "0014_audit_completion", "0013_identity_management"),
+            ("0015_feedback_ranking.py", "0015_feedback_ranking", "0014_audit_completion"),
+        ):
+            content = (versions / filename).read_text(encoding="utf-8")
+            self.assertIn(f'revision = "{revision}"', content)
+            self.assertIn(f'down_revision = "{down_revision}"', content)
+            self.assertIn("def downgrade()", content)
+
+    def test_frontend_dependencies_are_pinned(self) -> None:
+        package = source("frontend/package.json")
+        self.assertNotIn('"latest"', package)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,7 @@ const emit = defineEmits<{ close: []; openDocument: [documentId: string] }>()
 function statusText(): string {
   if (props.source?.status === 'DELETED') return '当前资料已删除'
   if (props.source?.status === 'DISABLED') return '当前资料已停用'
+  if (props.source?.status === 'FORBIDDEN') return props.source?.message || '当前无权查看该引用'
   return ''
 }
 </script>
@@ -40,7 +41,8 @@ function statusText(): string {
       </div>
 
       <h3 class="reference-heading">回答时引用的内容</h3>
-      <p class="reference-content">{{ source.content }}</p>
+      <p v-if="source.status === 'FORBIDDEN'" class="reference-content">{{ source.message || '当前无权查看该引用' }}</p>
+      <p v-else class="reference-content">{{ source.content }}</p>
     </section>
   </div>
 </template>

@@ -131,6 +131,34 @@ POST   /api/answer/stream
 GET    /api/health
 ```
 
+系统管理接口（仅超级管理员）：
+
+```text
+GET    /api/users
+POST   /api/users
+GET    /api/users/{id}
+PATCH  /api/users/{id}
+POST   /api/users/{id}/enable
+POST   /api/users/{id}/disable
+POST   /api/users/{id}/reset-password
+GET    /api/departments/tree
+POST   /api/departments
+PATCH  /api/departments/{id}
+POST   /api/departments/{id}/enable
+POST   /api/departments/{id}/disable
+GET    /api/roles
+POST   /api/roles
+PATCH  /api/roles/{id}
+POST   /api/roles/{id}/enable
+POST   /api/roles/{id}/disable
+PUT    /api/roles/{id}/users
+GET    /api/roles/{id}/documents
+GET    /api/audit/logs
+GET    /api/documents/{id}/acl
+PUT    /api/documents/{id}/access
+PATCH  /api/documents/{id}/external-policy
+```
+
 ## 第四期 RAG 问答配置
 
 本地问答不需要任何云端账号。千问通过独立的 Ollama 进程运行，回答完成后立即释放模型运行内存，模型文件继续保留在硬盘。

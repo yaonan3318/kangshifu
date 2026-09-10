@@ -41,6 +41,8 @@ class SearchResult(BaseModel):
     fusion_score: float
     rerank_score: float | None = None
     final_score: float
+    base_score: float | None = None
+    feedback_boost: float = 0.0
 
 
 class RetrievalStageItem(BaseModel):

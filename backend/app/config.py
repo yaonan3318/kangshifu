@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     search_vector_min_similarity: float = 0.55
     search_min_evidence_score: float = 0.35
     search_per_document_limit: int = 3
+    # 反馈排序：默认关闭；样本达到门槛后只对排序产生不超过 max_boost 的小幅调整。
+    search_feedback_ranking_enabled: bool = False
+    search_feedback_min_samples: int = 5
+    search_feedback_max_boost: float = 0.05
     search_synonyms: str = "k8s|kubernetes|容器编排;气泡项目|气泡检测|bubble;日报|工作记录|周报"
     rerank_enabled: bool = False
     rerank_model: str = "BAAI/bge-reranker-v2-m3"

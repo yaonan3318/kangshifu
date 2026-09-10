@@ -12,6 +12,7 @@ from app.models import (
     ChatSession, Document, DocumentChunk, DocumentStatus, KnowledgeBase,
 )
 from app.schemas.answer import AnswerEvent, AnswerSource
+from app.services.permissions import PermissionResolver
 
 DEFAULT_TITLE = "新会话"
 
@@ -119,20 +120,33 @@ class ChatService:
         return (message.content[:80] + "…") if message and len(message.content) > 80 else (message.content if message else None)
 
     def hydrate_source(self, source: ChatMessageSource) -> dict[str, Any]:
-        """给来源快照附加当前可用状态，用于标记“当前资料已停用”。"""
+        """给来源快照附加当前权限与可用状态。
+
+        历史会话引用必须按“当前权限”重新判定：失去权限时不返回正文快照；
+        资料删除/停用但仍有权限时，返回快照并标记状态。
+        """
         document, chunk, kb = self._current_state(source.document_id, source.chunk_id)
-        available, status = self._availability(document, chunk, kb)
-        return {
+        base = {
             "id": source.id,
             "citation_number": source.citation_number,
             "document_id": source.document_id,
             "chunk_id": source.chunk_id,
             "document_name": source.document_name,
-            "content_snapshot": source.content_snapshot,
             "location_snapshot": source.location_snapshot,
             "score": source.score,
+        }
+        if self.user is None or document is None:
+            return {**base, "content_snapshot": None, "available": False, "status": "FORBIDDEN", "message": "当前无权查看该引用"}
+        resolver = PermissionResolver(self.session, self.user)
+        if not resolver.can_read(document):
+            return {**base, "content_snapshot": None, "available": False, "status": "FORBIDDEN", "message": "当前无权查看该引用"}
+        available, status = self._availability(document, chunk, kb)
+        return {
+            **base,
+            "content_snapshot": source.content_snapshot,
             "available": available,
             "status": status,
+            "message": None,
         }
 
     def _current_state(self, document_id: uuid.UUID, chunk_id: uuid.UUID):

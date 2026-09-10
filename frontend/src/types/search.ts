@@ -21,6 +21,8 @@ export interface SearchResult {
   fusion_score: number
   rerank_score: number | null
   final_score: number
+  base_score?: number | null
+  feedback_boost?: number
 }
 
 export interface RetrievalStageItem { chunk_id:string;document_id:string;document_name:string;sequence_number:number;score:number;content_preview:string }
