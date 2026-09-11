@@ -2,19 +2,22 @@
 
 import uuid
 from typing import Annotated
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_session
 from app.errors import AppError
-from app.models import ChatMessage, ChatMessageSource, ChatSession
+from app.models import ChatMessage, ChatMessageRole, ChatMessageSource, ChatSession
 from app.schemas.chat import (
     ChatMessageOut, ChatSessionCreate, ChatSessionDetail, ChatSessionListItem,
     ChatSessionListResponse, ChatSessionPatch,
 )
 from app.services.chat import ChatService, default_title_for
+from app.services.pdf_export import build_answer_pdf
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -85,6 +88,36 @@ def _find(service: ChatService, session_id: uuid.UUID, include_archived: bool = 
 
 def _not_found() -> AppError:
     return AppError("CHAT_SESSION_NOT_FOUND", "会话不存在", 404)
+
+
+@router.get("/messages/{message_id}/export.pdf")
+def export_message_pdf(
+    message_id: uuid.UUID,
+    service: Annotated[ChatService, Depends(get_chat_service)],
+) -> Response:
+    """导出单条助手回答；会话所有权检查防止下载其他用户的内容。"""
+    message = service.session.get(ChatMessage, message_id)
+    if message is None or message.role != ChatMessageRole.ASSISTANT:
+        raise AppError("CHAT_MESSAGE_NOT_FOUND", "回答不存在", 404)
+    service.get(message.session_id, include_archived=True)
+    if not message.content.strip():
+        raise AppError("PDF_EXPORT_EMPTY", "当前回答没有可导出的内容", 400)
+
+    question = service.session.scalar(
+        select(ChatMessage.content).where(
+            ChatMessage.session_id == message.session_id,
+            ChatMessage.role == ChatMessageRole.USER,
+            ChatMessage.created_at <= message.created_at,
+        ).order_by(ChatMessage.created_at.desc()).limit(1)
+    ) or "公司知识问答"
+    sources = [_source_payload(source, service) for source in message.sources]
+    content = build_answer_pdf(question=question, answer=message.content, sources=sources)
+    filename = quote(f"康师傅知识回答-{message.id}.pdf")
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=answer.pdf; filename*=UTF-8''{filename}"},
+    )
 
 
 @router.get("/sessions", response_model=ChatSessionListResponse)

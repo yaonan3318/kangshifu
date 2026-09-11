@@ -41,3 +41,11 @@ export const restoreChatSession = async (id: string): Promise<ChatSessionItem> =
 
 export const deleteChatSession = async (id: string, purge = false): Promise<void> =>
   parse(await fetch(`/api/chat/sessions/${id}?purge=${purge}`, { method: 'DELETE' }))
+
+/** 下载由服务端排版生成的回答 PDF，避免触发浏览器打印窗口。 */
+export async function downloadAnswerPdf(messageId: string): Promise<Blob> {
+  const response = await fetch(`/api/chat/messages/${messageId}/export.pdf`)
+  if (response.ok) return response.blob()
+  const body = (await response.json().catch(() => ({}))) as ApiErrorBody
+  throw new ApiError(body.error?.code || 'PDF_EXPORT_FAILED', body.error?.message || 'PDF 导出失败', body.error?.details)
+}

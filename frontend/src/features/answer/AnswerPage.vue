@@ -9,7 +9,7 @@ import { getAssistantWelcome, listAssistants } from '../../api/assistants'
 import type { AssistantRecord, AssistantWelcome } from '../../types/assistant'
 import { submitFeedback } from '../../api/feedback'
 import { confirmApproval, getHarnessTask, rejectApproval, resumeHarness } from '../../api/harness'
-import { archiveChatSession, createChatSession, deleteChatSession, getChatSession, listChatSessions, renameChatSession, restoreChatSession } from '../../api/chat'
+import { archiveChatSession, createChatSession, deleteChatSession, downloadAnswerPdf, getChatSession, listChatSessions, renameChatSession, restoreChatSession } from '../../api/chat'
 import type { ChatMessageRecord, ChatSessionDetail, ChatSessionItem } from '../../types/chat'
 import type { HarnessApproval } from '../../types/answer'
 import MarkdownView from '../../components/MarkdownView.vue'
@@ -829,20 +829,33 @@ function exportMarkdown(turn: AnswerTurn) {
   URL.revokeObjectURL(url)
 }
 
-function exportPdf() {
-  // 浏览器“打印为 PDF”：只打印当前回答卡片，避免额外依赖。
-  document.body.classList.add('printing-answer')
+async function exportPdf(turn: AnswerTurn) {
+  if (!turn.assistantMessageId || turn.pdfExporting) return
+  turn.pdfExporting = true
+  turn.pdfExportNotice = null
   try {
-    window.print()
+    const blob = await downloadAnswerPdf(turn.assistantMessageId)
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `康师傅知识回答-${turn.key}.pdf`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+    turn.pdfExportNotice = { kind: 'success', message: 'PDF 已生成并开始下载' }
+  } catch (reason) {
+    turn.pdfExportNotice = { kind: 'error', message: reason instanceof Error ? reason.message : 'PDF 导出失败，请稍后重试' }
   } finally {
-    window.setTimeout(() => document.body.classList.remove('printing-answer'), 0)
+    turn.pdfExporting = false
   }
 }
 
 function reportAnswer(turn: AnswerTurn) {
   turn.feedbackReasons = ['举报敏感或错误内容']
   turn.feedbackComment = turn.feedbackComment ?? ''
-  void sendFeedback(turn, 'DOWN')
+  turn.feedbackNotice = null
+  turn.feedbackMode = true
 }
 
 function formatMs(value: number | null | undefined): string {
@@ -918,6 +931,7 @@ const DOWN_REASONS = ['答非所问', '内容不准确', '引用不正确', '资
 
 function openFeedbackMode(turn: AnswerTurn) {
   turn.feedbackMode = !turn.feedbackMode
+  turn.feedbackNotice = null
   if (turn.feedbackMode) {
     turn.feedbackReasons = []
     turn.feedbackComment = ''
@@ -925,15 +939,31 @@ function openFeedbackMode(turn: AnswerTurn) {
 }
 
 async function sendFeedback(turn: AnswerTurn, rating: 'UP' | 'DOWN') {
-  if (!turn.assistantMessageId) return
+  const reporting = rating === 'DOWN' && (turn.feedbackReasons ?? []).includes('举报敏感或错误内容')
+  if (!turn.assistantMessageId) {
+    turn.feedbackNotice = { kind: 'error', message: reporting ? '当前回答尚未保存，暂时无法举报' : '当前回答尚未保存，暂时无法提交反馈' }
+    return
+  }
+  if (turn.feedbackSubmitting) return
   const reasons = rating === 'DOWN' ? (turn.feedbackReasons ?? []) : []
   const comment = rating === 'DOWN' ? (turn.feedbackComment ?? '').trim() : ''
+  turn.feedbackSubmitting = true
+  turn.feedbackNotice = null
   try {
     await submitFeedback({ messageId: turn.assistantMessageId, rating, reasons, comment })
     turn.feedbackRating = rating
     turn.feedbackMode = false
+    turn.feedbackNotice = {
+      kind: 'success',
+      message: reporting ? '举报已提交，我们会尽快核查' : '反馈已提交，感谢你的帮助',
+    }
   } catch (reason) {
-    turn.warnings.push({ code: 'FEEDBACK_FAILED', message: reason instanceof Error ? reason.message : '反馈提交失败' })
+    turn.feedbackNotice = {
+      kind: 'error',
+      message: reason instanceof Error ? reason.message : (reporting ? '举报提交失败，请稍后重试' : '反馈提交失败，请稍后重试'),
+    }
+  } finally {
+    turn.feedbackSubmitting = false
   }
 }
 
@@ -1124,11 +1154,31 @@ onBeforeUnmount(() => {
               <div class="answer-actions" v-if="turn.answer || !turn.generating">
                 <button v-if="turn.answer" type="button" title="复制回答" @click="copyAnswer(turn)">复制</button>
                 <button v-if="turn.answer" type="button" title="导出 Markdown" @click="exportMarkdown(turn)">导出 MD</button>
-                <button v-if="turn.answer" type="button" title="打印/导出 PDF" @click="exportPdf">导出 PDF</button>
+                <button v-if="turn.answer" type="button" title="下载 PDF" :disabled="turn.pdfExporting" @click="exportPdf(turn)">{{ turn.pdfExporting ? '生成 PDF…' : '导出 PDF' }}</button>
                 <button v-if="turn.answer && !turn.generating" type="button" title="重新生成" @click="regenerate(turn)">重新生成</button>
                 <button v-if="turn.answer && !turn.generating" type="button" class="text-danger" title="举报敏感或错误答案" @click="reportAnswer(turn)">举报</button>
               </div>
             </header>
+
+            <p v-if="turn.pdfExportNotice" class="answer-notice" :class="turn.pdfExportNotice.kind === 'success' ? 'is-success' : 'is-warning'">{{ turn.pdfExportNotice.message }}</p>
+            <p v-if="turn.feedbackNotice" class="answer-notice" :class="turn.feedbackNotice.kind === 'success' ? 'is-success' : 'is-warning'">{{ turn.feedbackNotice.message }}</p>
+            <div v-if="turn.feedbackMode" class="feedback-panel is-prominent">
+              <p>{{ (turn.feedbackReasons ?? []).includes('举报敏感或错误内容') ? '举报这个回答' : '请告诉我哪里不够好（可多选）' }}</p>
+              <div class="feedback-reasons">
+                <label v-for="reason in DOWN_REASONS" :key="reason">
+                  <input
+                    type="checkbox"
+                    :checked="(turn.feedbackReasons ?? []).includes(reason)"
+                    @change="toggleReason(turn, reason)"
+                  >{{ reason }}
+                </label>
+              </div>
+              <textarea v-model="turn.feedbackComment" rows="3" maxlength="2000" :placeholder="(turn.feedbackReasons ?? []).includes('举报敏感或错误内容') ? '请补充举报原因或问题位置（可选）' : '补充意见（可选）'"></textarea>
+              <div class="feedback-actions">
+                <button type="button" class="secondary-action" :disabled="turn.feedbackSubmitting" @click="turn.feedbackMode = false">取消</button>
+                <button type="button" class="send-answer" :disabled="turn.feedbackSubmitting" @click="sendFeedback(turn, 'DOWN')">{{ turn.feedbackSubmitting ? '提交中…' : ((turn.feedbackReasons ?? []).includes('举报敏感或错误内容') ? '提交举报' : '提交反馈') }}</button>
+              </div>
+            </div>
 
             <div v-if="turn.generating" class="answer-stage">
               <span></span>{{ stageText(turn) }}
@@ -1186,24 +1236,6 @@ onBeforeUnmount(() => {
                 <button type="button" class="foot-action dislike" @click="openFeedbackMode(turn)">没帮助</button>
               </template>
             </div>
-            <div v-if="turn.feedbackMode" class="feedback-panel">
-              <p>请告诉我哪里不够好（可多选）</p>
-              <div class="feedback-reasons">
-                <label v-for="reason in DOWN_REASONS" :key="reason">
-                  <input
-                    type="checkbox"
-                    :checked="(turn.feedbackReasons ?? []).includes(reason)"
-                    @change="toggleReason(turn, reason)"
-                  >{{ reason }}
-                </label>
-              </div>
-              <textarea v-model="turn.feedbackComment" rows="2" maxlength="2000" placeholder="补充意见（可选）"></textarea>
-              <div class="feedback-actions">
-                <button type="button" class="secondary-action" @click="turn.feedbackMode = false">取消</button>
-                <button type="button" class="send-answer" @click="sendFeedback(turn, 'DOWN')">提交反馈</button>
-              </div>
-            </div>
-
             <p v-if="turn.metrics?.retrieval_query && turn.metrics.retrieval_query !== turn.question" class="retrieval-query-note">
               实际检索问题：{{ turn.metrics.retrieval_query }}
               <span v-if="turn.metrics.retrieval_queries && turn.metrics.retrieval_queries.length > 1">（多查询：{{ turn.metrics.retrieval_queries.join(' ｜ ') }}）</span>

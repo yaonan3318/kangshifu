@@ -61,6 +61,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @keyframes answer-pulse { to { opacity: .25; transform: scale(.75); } }
 .answer-notice { margin: 13px 0 0; padding: 11px 13px; border-radius: 10px; font-size: 13px; line-height: 1.55; }
 .answer-notice.is-warning { background: #fff4dd; color: #765016; }
+.answer-notice.is-success { background: #edf8f0; color: #24633a; }
 .answer-sources { margin-top: 18px; border-top: 1px solid #e1e6df; padding-top: 15px; }
 .answer-sources > summary { color: #476148; cursor: pointer; font-size: 13px; }
 .answer-sources ol { display: grid; gap: 9px; padding: 12px 0 0; list-style: none; }
@@ -560,6 +561,7 @@ td small { color: #8a9388; font-family: ui-monospace, monospace; }
 .feedback-ask, .feedback-done { color: #7c877b; font-size: 12px; }
 .feedback-done { color: #3e6b45; }
 .feedback-panel { margin-top: 10px; padding: 12px; border: 1px solid #e0e5dd; border-radius: 12px; background: #f8faf7; }
+.feedback-panel.is-prominent { margin-bottom: 14px; border-color: #bdd3f5; background: #f5f8fe; box-shadow: 0 8px 24px rgba(35, 91, 169, .08); }
 .feedback-panel > p { margin: 0 0 8px; color: #43513f; font-size: 13px; }
 .feedback-reasons { display: flex; flex-wrap: wrap; gap: 8px; }
 .feedback-reasons label { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid #d5dcd1; border-radius: 999px; background: #fff; color: #455240; font-size: 12px; cursor: pointer; }
@@ -1227,22 +1229,11 @@ progress::-webkit-progress-value { background: #3972bf; }
   .chatflow-editor-panel { padding: 20px 16px; }
 }
 
-/* P2-5 用户体验：推荐追问、知识缺口与打印导出 */
+/* P2-5 用户体验：推荐追问、知识缺口与回答导出 */
 .follow-up-suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 4px; }
 .follow-up-suggestions > span { color: #6a7568; font-size: 12px; }
 .gap-question { max-width: 360px; overflow-wrap: anywhere; }
 .rerun-text { max-height: 260px; overflow: auto; margin: 6px 0 0; padding: 10px 12px; border-radius: 9px; background: var(--surface-soft); white-space: pre-wrap; font: 13px/1.6 ui-monospace, monospace; }
-@media print {
-  body.printing-answer .app-header,
-  body.printing-answer .session-sidebar,
-  body.printing-answer .qa-topbar,
-  body.printing-answer .qa-composer,
-  body.printing-answer .answer-actions,
-  body.printing-answer .feedback-bar,
-  body.printing-answer .follow-up-suggestions,
-  body.printing-answer .qa-turn:not(:last-of-type) { display: none !important; }
-}
-
 /* P2-6 文档理解：切片配置与预览 */
 .kb-chunking-editor { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line); }
 .chunk-preview { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); }

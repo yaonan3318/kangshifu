@@ -230,4 +230,8 @@ export interface AnswerTurn {
   feedbackMode?: boolean
   feedbackReasons?: string[]
   feedbackComment?: string
+  feedbackSubmitting?: boolean
+  feedbackNotice?: { kind: 'success' | 'error'; message: string } | null
+  pdfExporting?: boolean
+  pdfExportNotice?: { kind: 'success' | 'error'; message: string } | null
 }
