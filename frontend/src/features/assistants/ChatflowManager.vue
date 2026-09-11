@@ -21,6 +21,9 @@ const busy = ref(false)
 const debugQuestion = ref('')
 const includeGeneration = ref(false)
 const debugResult = ref<ChatflowDebugResult | null>(null)
+const editorOpen = ref(false)
+const creating = ref(false)
+const newFlowName = ref('')
 
 const selected = computed(() => flows.value.find((item) => item.id === selectedId.value) ?? null)
 const dirty = ref(false)
@@ -45,19 +48,37 @@ async function load() {
     const [flowList, types] = await Promise.all([listChatflows(), listNodeTypes()])
     flows.value = flowList
     nodeTypes.value = types
-    if (!selectedId.value && flows.value.length) selectFlow(flows.value[0].id)
   } catch (reason) {
     error.value = reason instanceof ApiError ? reason.message : '读取流程失败'
   }
 }
 
 function selectFlow(id: string) {
+  creating.value = false
   selectedId.value = id
   const flow = flows.value.find((item) => item.id === id)
   draft.value = flow ? JSON.parse(JSON.stringify(flow.draft_graph)) : null
   dirty.value = false
   debugResult.value = null
+  editorOpen.value = true
   void loadVersions()
+}
+
+function openCreate() {
+  selectedId.value = ''
+  draft.value = null
+  creating.value = true
+  newFlowName.value = ''
+  error.value = ''
+  editorOpen.value = true
+}
+
+function closeEditor() {
+  editorOpen.value = false
+  creating.value = false
+  selectedId.value = ''
+  draft.value = null
+  debugResult.value = null
 }
 
 async function loadVersions() {
@@ -70,21 +91,25 @@ async function loadVersions() {
 }
 
 async function createFlow() {
-  const name = window.prompt('流程名称')
-  if (!name?.trim()) return
+  const name = newFlowName.value.trim()
+  if (!name) { error.value = '请填写流程名称'; return }
+  busy.value = true
+  error.value = ''
   try {
-    const created = await createChatflow({ name: name.trim() })
+    const created = await createChatflow({ name })
     await load()
     selectFlow(created.id)
   } catch (reason) {
     error.value = reason instanceof ApiError ? reason.message : '创建流程失败'
+  } finally {
+    busy.value = false
   }
 }
 
 async function removeFlow(item: ChatflowRecord) {
   if (!window.confirm(`删除流程“${item.name}”？绑定该流程的助手将回退到内置默认流程。`)) return
   await deleteChatflow(item.id)
-  if (selectedId.value === item.id) selectedId.value = ''
+  if (selectedId.value === item.id) closeEditor()
   await load()
 }
 
@@ -176,32 +201,56 @@ onMounted(load)
     <p v-if="error" class="error">{{ error }}</p>
     <p v-if="notice" class="assistant-hint">{{ notice }}</p>
 
-    <div class="chatflow-layout">
-      <section class="assistant-panel chatflow-list">
+    <div class="chatflow-admin-layout">
+      <section class="assistant-panel chatflow-list-panel">
         <div class="section-heading">
           <div><p class="eyebrow">FLOWS</p><h2>流程列表</h2></div>
-          <button type="button" class="primary-action" @click="createFlow">＋ 新建流程</button>
+          <button type="button" class="primary-action" @click="openCreate">＋ 新建流程</button>
         </div>
-        <ul class="governance-list">
-          <li v-for="item in flows" :key="item.id" :class="{ selected: item.id === selectedId }">
-            <div>
-              <strong>{{ item.name }}</strong>
-              <small>已发布 v{{ item.published_version }} · 绑定助手 {{ item.bound_assistant_count }}</small>
-            </div>
-            <div class="row-actions">
-              <button type="button" @click="selectFlow(item.id)">编辑</button>
-              <button type="button" class="text-danger" @click="removeFlow(item)">删除</button>
-            </div>
-          </li>
-        </ul>
+        <p v-if="!flows.length" class="assistant-hint">还没有流程，点击“新建流程”开始配置。</p>
+        <div v-else class="admin-table-wrap">
+          <table class="admin-table">
+            <thead><tr><th>流程名称</th><th>说明</th><th>发布版本</th><th>绑定助手</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr v-for="item in flows" :key="item.id" :class="{ selected: item.id === selectedId }">
+                <td><strong>{{ item.name }}</strong></td>
+                <td class="chatflow-description" :title="item.description || ''">{{ item.description || '暂无说明' }}</td>
+                <td>v{{ item.published_version }}</td>
+                <td>{{ item.bound_assistant_count }}</td>
+                <td><span :class="item.enabled ? 'is-active' : 'is-stale'">{{ item.enabled ? '启用' : '停用' }}</span></td>
+                <td>{{ new Date(item.updated_at).toLocaleString('zh-CN') }}</td>
+                <td class="action-cell"><div class="row-actions">
+                  <button type="button" @click="selectFlow(item.id)">编辑</button>
+                  <button type="button" class="text-danger" @click="removeFlow(item)">删除</button>
+                </div></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
-      <section v-if="selected && draft" class="assistant-panel chatflow-canvas">
+      <div v-if="editorOpen" class="chatflow-editor-backdrop" @click.self="closeEditor">
+      <section class="assistant-panel chatflow-editor-panel" role="dialog" aria-modal="true" :aria-label="creating ? '新建流程' : '编辑流程'">
+        <div v-if="creating" class="chatflow-create-form">
+          <div class="section-heading">
+            <div><p class="eyebrow">EDITOR</p><h2>新建流程</h2></div>
+            <button type="button" class="close-button" aria-label="关闭" @click="closeEditor">×</button>
+          </div>
+          <label class="form-row">流程名称<input v-model="newFlowName" maxlength="255" placeholder="例如：制度问答流程" @keyup.enter="createFlow"></label>
+          <p class="assistant-hint">创建后可继续配置节点、保存草稿并发布版本。</p>
+          <div class="form-actions">
+            <button type="button" class="secondary-action" @click="closeEditor">取消</button>
+            <button type="button" :disabled="busy || !newFlowName.trim()" @click="createFlow">{{ busy ? '创建中…' : '创建流程' }}</button>
+          </div>
+        </div>
+
+        <template v-else-if="selected && draft">
         <div class="section-heading">
           <div><p class="eyebrow">CANVAS</p><h2>{{ selected.name }}</h2></div>
           <div class="row-actions">
             <button type="button" class="secondary-action" :disabled="busy || !dirty" @click="saveDraft">保存草稿</button>
             <button type="button" :disabled="busy" @click="publish">发布版本</button>
+            <button type="button" class="close-button" aria-label="关闭" @click="closeEditor">×</button>
           </div>
         </div>
         <div class="chatflow-nodes">
@@ -263,7 +312,9 @@ onMounted(load)
             <p class="assistant-hint">总耗时 {{ debugResult.total_ms }} ms</p>
           </div>
         </div>
+        </template>
       </section>
+      </div>
     </div>
   </main>
 </template>

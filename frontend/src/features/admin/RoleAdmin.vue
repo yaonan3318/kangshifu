@@ -200,6 +200,10 @@ onMounted(() => {
         <p v-if="loading" class="assistant-hint">正在加载…</p>
         <div v-else class="admin-table-wrap">
           <table class="admin-table">
+            <colgroup class="role-table-columns">
+              <col style="width: 14%"><col style="width: 25%"><col style="width: 7%"><col style="width: 7%">
+              <col style="width: 9%"><col style="width: 8%"><col style="width: 12%"><col style="width: 18%">
+            </colgroup>
             <thead><tr><th>角色名称</th><th>描述</th><th>用户数</th><th>文档数</th><th>功能权限</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
             <tbody>
               <tr v-for="role in roles" :key="role.id" :class="{ selected: role.id === selectedId }">
@@ -210,10 +214,10 @@ onMounted(() => {
                 <td>{{ role.permission_count ?? role.permissions?.length ?? 0 }}</td>
                 <td><span :class="role.enabled ? 'is-active' : 'is-stale'">{{ role.enabled ? '启用' : '停用' }}</span></td>
                 <td>{{ new Date(role.created_at).toLocaleDateString('zh-CN') }}</td>
-                <td class="row-actions">
+                <td class="action-cell"><div class="row-actions">
                   <button type="button" @click="selectRole(role)">编辑</button>
                   <button type="button" @click="toggleEnabled(role)">{{ role.enabled ? '停用' : '启用' }}</button>
-                </td>
+                </div></td>
               </tr>
             </tbody>
           </table>

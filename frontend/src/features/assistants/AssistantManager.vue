@@ -247,6 +247,10 @@ onMounted(refresh)
         <p v-if="loading" class="assistant-hint">正在加载…</p>
         <div v-else class="admin-table-wrap">
           <table class="admin-table">
+            <colgroup class="assistant-table-columns">
+              <col style="width: 15%"><col style="width: 22%"><col style="width: 10%"><col style="width: 12%">
+              <col style="width: 8%"><col style="width: 8%"><col style="width: 7%"><col style="width: 16%">
+            </colgroup>
             <thead><tr><th>助手</th><th>职责说明</th><th>模型</th><th>知识库范围</th><th>DeepSeek</th><th>Harness</th><th>状态</th><th>操作</th></tr></thead>
             <tbody>
               <tr v-for="item in assistants" :key="item.id" :class="{ selected: item.id === selectedId }">
@@ -257,11 +261,11 @@ onMounted(refresh)
                 <td>{{ !item.use_deepseek_allowed ? '禁止' : (item.deepseek_enabled ? '开启' : '关闭') }}</td>
                 <td>{{ item.harness_enabled ? '开启' : '关闭' }}</td>
                 <td><span :class="item.enabled ? 'is-active' : 'is-stale'">{{ item.enabled ? '启用' : '停用' }}</span></td>
-                <td class="row-actions">
+                <td class="action-cell"><div class="row-actions">
                   <button type="button" @click="selectAssistant(item.id)">编辑</button>
                   <button type="button" @click="toggle(item)">{{ item.enabled ? '停用' : '启用' }}</button>
                   <button v-if="item.id !== assistants[0]?.id" type="button" class="text-danger" @click="remove(item)">删除</button>
-                </td>
+                </div></td>
               </tr>
             </tbody>
           </table>
