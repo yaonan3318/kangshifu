@@ -1,6 +1,10 @@
-"""PDF 解析器：文字层优先，识别标题层级、去除页眉页脚、处理多栏/表格/图注，扫描页回退 OCR。"""
+"""PDF 解析器：文字层优先，识别标题层级、去除页眉页脚、处理多栏/表格/图注，扫描页回退 OCR。
+
+P2-6：无论页面是否已有文字层，都会提取内嵌图片并 OCR，再按版面距离把图片与图注关联。
+"""
 
 from collections import Counter
+import io
 from pathlib import Path
 import statistics
 
@@ -13,6 +17,8 @@ from app.parsers.base import ParsedBlock
 CAPTION_PREFIXES = ("图", "表", "figure", "table", "fig.", "chart")
 HEADING_RATIO = 1.15
 HEADER_FOOTER_RATIO = 0.5
+# 图片与图注的最大版面距离（PDF 点）；超过则认为无关联。
+CAPTION_MAX_DISTANCE = 60.0
 
 
 class PdfParser:
@@ -40,6 +46,7 @@ class PdfParser:
                     page_payloads.append({
                         "page": page_index, "ocr": False, "text": text, "confidence": None,
                         "blocks": self._text_blocks(page), "tables": self._tables(page, page_index),
+                        "images": self._image_blocks(page, page_index),
                         "width": page.rect.width, "height": page.rect.height,
                     })
             repeated = self._repeated_lines(page_payloads)
@@ -119,7 +126,7 @@ class PdfParser:
         blocks = payload["blocks"]
         width = payload.get("width") or 1.0
         height = payload.get("height") or 1.0
-        if not blocks:
+        if not blocks and not payload.get("images"):
             return []
         weighted = [block["size"] for block in blocks for _ in range(max(1, len(block["text"])))]
         body_size = statistics.median(weighted) if weighted else 0.0
@@ -133,10 +140,13 @@ class PdfParser:
                 continue
             kept.append(block)
         ordered = self._sort_columns(kept, width)
+        images, caption_block_ids = self._associate_captions(payload.get("images") or [], ordered)
         output: list[ParsedBlock] = []
         headings: list[str] = []
         heading_sizes: list[float] = []
         for block in ordered:
+            if id(block) in caption_block_ids:
+                continue
             text = block["text"]
             if self._is_heading(block, body_size):
                 while heading_sizes and heading_sizes[-1] >= block["size"]:
@@ -155,7 +165,70 @@ class PdfParser:
                 content=table["text"], page_start=table["page"], page_end=table["page"],
                 section_path=[*headings, "表格"], block_type="table",
             ))
+        for image, caption in images:
+            content = f"{caption}\n{image['text']}" if caption else image["text"]
+            output.append(ParsedBlock(
+                content=content, page_start=payload["page"], page_end=payload["page"],
+                section_path=headings.copy(), block_type="image", ocr_confidence=image.get("confidence"),
+            ))
         return output
+
+    def _image_blocks(self, page, page_index: int) -> list[dict]:
+        """提取页面内嵌图片并 OCR；文字型 PDF 也会处理，不再只对整页 OCR。"""
+        images: list[dict] = []
+        try:
+            data = page.get_text("dict")
+        except Exception:
+            return images
+        for block in data.get("blocks", []):
+            if block.get("type") != 1:
+                continue
+            raw = block.get("image")
+            if not raw:
+                continue
+            try:
+                image = Image.open(io.BytesIO(raw))
+                result = self.ocr.recognize(image)
+            except Exception:
+                continue
+            text = (result.text or "").strip()
+            if not text:
+                continue
+            images.append({
+                "bbox": block.get("bbox", (0.0, 0.0, 0.0, 0.0)),
+                "text": text, "confidence": result.confidence, "page": page_index,
+            })
+        return images
+
+    @staticmethod
+    def _associate_captions(images: list[dict], blocks: list[dict]) -> tuple[list[tuple[dict, str | None]], set[int]]:
+        """按版面距离把图片与最近的图注候选关联；返回 (图片, 图注) 与被占用的图注块。"""
+        caption_block_ids: set[int] = set()
+        results: list[tuple[dict, str | None]] = []
+        for image in images:
+            ix0, iy0, ix1, iy1 = image["bbox"]
+            best_index: int | None = None
+            best_distance = CAPTION_MAX_DISTANCE
+            for index, block in enumerate(blocks):
+                if id(block) in caption_block_ids:
+                    continue
+                text = block["text"].strip()
+                if not text.lower().startswith(CAPTION_PREFIXES):
+                    continue
+                bx0, by0, bx1, by1 = block["bbox"]
+                horizontal = min(ix1, bx1) - max(ix0, bx0)
+                if horizontal <= 0:
+                    continue
+                vertical = max(0.0, max(iy0 - by1, by0 - iy1))
+                if vertical < best_distance:
+                    best_distance = vertical
+                    best_index = index
+            caption = None
+            if best_index is not None:
+                caption_block_ids.add(id(blocks[best_index]))
+                caption = blocks[best_index]["text"].strip()
+            results.append((image, caption))
+        return results, caption_block_ids
 
     @staticmethod
     def _is_heading(block: dict, body_size: float) -> bool:

@@ -2,6 +2,7 @@
 
 import logging
 from datetime import UTC, datetime, timedelta
+import uuid
 
 import pymupdf
 import pytesseract
@@ -108,19 +109,28 @@ class ProcessingService:
             raise ValueError("EMPTY_CONTENT")
 
         self.session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
-        parent_sequence: int | None = None
+        parent_chunk: DocumentChunk | None = None
         for sequence, chunk in enumerate(chunks, start=1):
-            if chunk.chunk_role == "parent":
-                parent_sequence = sequence
-            self.session.add(DocumentChunk(
+            row = DocumentChunk(
+                id=uuid.uuid4(),
                 document_id=document.id, sequence_number=sequence, content=chunk.content,
                 page_start=chunk.page_start, page_end=chunk.page_end, slide_number=chunk.slide_number,
                 sheet_name=chunk.sheet_name, row_start=chunk.row_start, row_end=chunk.row_end,
                 section_path=chunk.section_path, ocr_confidence=chunk.ocr_confidence,
                 chunk_role=chunk.chunk_role,
-                parent_sequence_number=(parent_sequence if chunk.chunk_role == "child" else None),
+                parent_sequence_number=(
+                    parent_chunk.sequence_number
+                    if chunk.chunk_role == "child" and parent_chunk is not None else None
+                ),
+                parent_chunk_id=(
+                    parent_chunk.id
+                    if chunk.chunk_role == "child" and parent_chunk is not None else None
+                ),
                 token_count=len(keyword_text(chunk.content).split()),
-            ))
+            )
+            if chunk.chunk_role == "parent":
+                parent_chunk = row
+            self.session.add(row)
         document.status = DocumentStatus.PARSED
         document.parser_name = parser.name
         document.parser_version = parser.version

@@ -88,6 +88,9 @@ export interface AnswerSource {
   ocr_confidence: number | null
   match_type: string
   score?: number | null
+  retrieval_rank?: number | null
+  pre_rerank_rank?: number | null
+  post_rerank_rank?: number | null
 }
 
 export interface AnswerWarning { code: string; message: string }
@@ -96,6 +99,27 @@ export interface AnswerStatus {
   ollama: { reachable: boolean; model: string; installed: boolean }
   deepseek_configured: boolean
   deepseek_model: string
+}
+
+export type AnswerJobStatus =
+  | 'PENDING' | 'RETRIEVING' | 'GENERATING' | 'VERIFYING'
+  | 'COMPLETED' | 'FAILED' | 'CANCELLED'
+
+export interface AnswerJob {
+  id: string
+  conversation_id: string | null
+  message_id: string | null
+  status: AnswerJobStatus
+  current_stage: string | null
+  partial_content: string
+  event_cursor: number
+  metrics: Record<string, unknown>
+  error_code: string | null
+  error_message: string | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+  cancelled_at: string | null
 }
 
 export interface AnswerEvent {
@@ -165,7 +189,11 @@ export interface CitationSource {
   extension?: string | null
   version_number?: number | null
   matched_keywords?: string[]
-  status: 'ACTIVE' | 'DISABLED' | 'DELETED' | 'FORBIDDEN'
+  retrieval_rank?: number | null
+  pre_rerank_rank?: number | null
+  post_rerank_rank?: number | null
+  cited_version?: number | null
+  status: 'ACTIVE' | 'DISABLED' | 'DELETED' | 'FORBIDDEN' | 'VERSION_CHANGED'
   message?: string | null
   meta?: Record<string, unknown>
 }
@@ -191,6 +219,8 @@ export interface AnswerTurn {
   stage: string | null
   failed: boolean
   stopped: boolean
+  jobId?: string | null
+  cursor?: number
   errorMessage?: string
   harnessTaskId: string | null
   harnessSteps: HarnessStep[]

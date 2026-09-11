@@ -37,7 +37,8 @@ const sets = ref<EvaluationSet[]>([])
 const selectedSetId = ref('')
 const cases = ref<RetrievalCase[]>([])
 const caseForm = reactive({
-  name: '', expectedDocs: '', mustCiteDocs: '', forbiddenDocs: '', keypoints: '', expectedNoAnswer: false,
+  name: '', expectedDocs: '', expectedChunks: '', mustCiteDocs: '', forbiddenDocs: '',
+  keypoints: '', expectedNoAnswer: false,
 })
 const importResult = ref('')
 
@@ -165,6 +166,7 @@ async function saveCase() {
       question: question.value.trim(),
       knowledge_base_id: knowledgeBaseId.value || null,
       expected_document_ids: splitTokens(caseForm.expectedDocs),
+      expected_chunk_ids: splitTokens(caseForm.expectedChunks),
       must_cite_document_ids: splitTokens(caseForm.mustCiteDocs),
       forbidden_document_ids: splitTokens(caseForm.forbiddenDocs),
       expected_answer_keypoints: splitTokens(caseForm.keypoints),
@@ -172,6 +174,7 @@ async function saveCase() {
     })
     caseForm.name = ''
     caseForm.expectedDocs = ''
+    caseForm.expectedChunks = ''
     caseForm.mustCiteDocs = ''
     caseForm.forbiddenDocs = ''
     caseForm.keypoints = ''
@@ -301,6 +304,18 @@ function formatMetric(value: number | string): string {
   return typeof value === 'number' ? value.toFixed(4) : String(value)
 }
 
+function formatMetricValue(value: number, unit: string): string {
+  return unit === 'ms' ? `${value.toFixed(1)} ms` : value.toFixed(4)
+}
+
+function directionLabel(direction?: string): string {
+  if (direction === 'up') return '上升'
+  if (direction === 'down') return '下降'
+  if (direction === 'same') return '不变'
+  if (direction === 'changed') return '已修改'
+  return '—'
+}
+
 onMounted(load)
 </script>
 
@@ -363,6 +378,7 @@ onMounted(load)
         <div class="case-form">
           <input v-model="caseForm.name" placeholder="用例名称">
           <input v-model="caseForm.expectedDocs" placeholder="正确文档（UUID 或文件名，分号分隔）">
+          <input v-model="caseForm.expectedChunks" placeholder="期望片段 chunk_id（UUID，分号分隔）">
           <input v-model="caseForm.mustCiteDocs" placeholder="必须引用文档">
           <input v-model="caseForm.forbiddenDocs" placeholder="禁止召回文档">
           <input v-model="caseForm.keypoints" placeholder="答案关键点，分号分隔">
@@ -375,7 +391,7 @@ onMounted(load)
           <li v-for="item in cases" :key="item.id">
             <div>
               <strong>{{ item.name }}</strong>
-              <small>{{ item.question }} · 正确 {{ item.expected_document_ids.length }} · 必须引用 {{ item.must_cite_document_ids.length }} · 禁止 {{ item.forbidden_document_ids.length }} · 关键点 {{ item.expected_answer_keypoints.length }}</small>
+              <small>{{ item.question }} · 正确文档 {{ item.expected_document_ids.length }} · 期望片段 {{ item.expected_chunk_ids.length }} · 必须引用 {{ item.must_cite_document_ids.length }} · 禁止 {{ item.forbidden_document_ids.length }} · 关键点 {{ item.expected_answer_keypoints.length }}</small>
             </div>
             <button class="text-danger" @click="removeCase(item)">删除</button>
           </li>
@@ -402,8 +418,8 @@ onMounted(load)
             <button class="secondary-action" @click="diffConfigs">对比</button>
           </div>
           <table v-if="configDiff.length" class="admin-table">
-            <thead><tr><th>参数</th><th>A</th><th>B</th></tr></thead>
-            <tbody><tr v-for="item in configDiff" :key="item.field"><td>{{ item.label }}</td><td>{{ item.left }}</td><td>{{ item.right }}</td></tr></tbody>
+            <thead><tr><th>参数</th><th>版本 A</th><th>版本 B</th><th>差值</th><th>方向</th></tr></thead>
+            <tbody><tr v-for="item in configDiff" :key="item.field"><td>{{ item.label }}</td><td>{{ item.left }}</td><td>{{ item.right }}</td><td>{{ item.delta ?? '—' }}</td><td>{{ directionLabel(item.direction) }}</td></tr></tbody>
           </table>
         </div>
         <form class="config-form" @submit.prevent="createConfig">
@@ -436,6 +452,7 @@ onMounted(load)
           <option value="SYNONYM">同义词</option>
           <option value="ABBREVIATION">缩写/简称</option>
           <option value="PROPER_NOUN">专有名词</option>
+          <option value="CROSS_LANGUAGE">中英文映射</option>
         </select>
         <input v-model="dictionaryForm.term" placeholder="词条，如 k8s">
         <input v-model="dictionaryForm.expansions" placeholder="扩展词，分号分隔，如 kubernetes;容器编排">
@@ -445,7 +462,7 @@ onMounted(load)
         <li v-for="item in dictionaries" :key="item.id">
           <div>
             <strong>{{ item.term }}</strong>
-            <small>{{ { SYNONYM: '同义词', ABBREVIATION: '缩写', PROPER_NOUN: '专有名词' }[item.category] }} · {{ item.expansions.join('、') || '无扩展' }} · {{ item.enabled ? '启用' : '停用' }}</small>
+            <small>{{ { SYNONYM: '同义词', ABBREVIATION: '缩写', PROPER_NOUN: '专有名词', CROSS_LANGUAGE: '中英文映射' }[item.category] }} · {{ item.expansions.join('、') || '无扩展' }} · {{ item.enabled ? '启用' : '停用' }}</small>
           </div>
           <button class="text-danger" @click="removeDictionary(item)">删除</button>
         </li>
@@ -483,15 +500,25 @@ onMounted(load)
       </div>
 
       <template v-if="comparison">
-        <h3>指标变化（右 - 左）</h3>
+        <h3>指标变化（新 - 旧）</h3>
         <table class="admin-table">
-          <thead><tr><th>指标</th><th>变化</th></tr></thead>
-          <tbody><tr v-for="(value, key) in comparison.metric_deltas" :key="key"><td>{{ key }}</td><td :class="{ 'delta-up': value > 0, 'delta-down': value < 0 }">{{ value > 0 ? '+' : '' }}{{ value.toFixed(4) }}</td></tr></tbody>
+          <thead><tr><th>指标</th><th>旧值</th><th>新值</th><th>差值</th><th>提升 / 下降</th></tr></thead>
+          <tbody>
+            <tr v-for="item in comparison.metric_changes" :key="item.key">
+              <td>{{ item.label }}</td>
+              <td>{{ formatMetricValue(item.left, item.unit) }}</td>
+              <td>{{ formatMetricValue(item.right, item.unit) }}</td>
+              <td :class="{ 'delta-up': item.improved === true, 'delta-down': item.improved === false }">{{ item.delta > 0 ? '+' : '' }}{{ item.delta }}</td>
+              <td :class="{ 'delta-up': item.improved === true, 'delta-down': item.improved === false }">
+                {{ item.improved === null ? '不变' : (item.improved ? '提升' : '下降') }}
+              </td>
+            </tr>
+          </tbody>
         </table>
         <h3 v-if="comparison.config_differences.length">配置差异</h3>
         <table v-if="comparison.config_differences.length" class="admin-table">
-          <thead><tr><th>参数</th><th>旧</th><th>新</th></tr></thead>
-          <tbody><tr v-for="item in comparison.config_differences" :key="item.field"><td>{{ item.label }}</td><td>{{ item.left }}</td><td>{{ item.right }}</td></tr></tbody>
+          <thead><tr><th>参数</th><th>旧</th><th>新</th><th>差值</th><th>方向</th></tr></thead>
+          <tbody><tr v-for="item in comparison.config_differences" :key="item.field"><td>{{ item.label }}</td><td>{{ item.left }}</td><td>{{ item.right }}</td><td>{{ item.delta ?? '—' }}</td><td>{{ directionLabel(item.direction) }}</td></tr></tbody>
         </table>
       </template>
     </section>

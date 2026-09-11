@@ -48,6 +48,10 @@ class Assistant(Base):
     no_answer_policy: Mapped[str] = mapped_column(String(16), default="SUGGEST", server_default="SUGGEST")
     capabilities: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
     limitations: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    # P2-3：知识库范围语义。True=全部启用知识库；False 且无绑定=尚未配置（不可检索）。
+    allow_all_knowledge_bases: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
     # P2-4：助手可绑定一个已发布的 Chatflow；为空时使用内置默认流程。
     chatflow_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("chatflows.id", ondelete="SET NULL"), nullable=True, index=True

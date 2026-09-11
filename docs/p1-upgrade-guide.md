@@ -28,6 +28,10 @@ P1 在既有 P0（上传、解析、OCR、切片、混合检索、多知识库�
 | `0022_chatflow` | chatflows / chatflow_versions 固定画布流程，assistants.chatflow_id 绑定 |
 | `0023_knowledge_gaps` | knowledge_gaps 知识缺口中心 |
 | `0024_document_understanding` | 知识库切片配置、文档作者/部门/主题/关联文档、父子切片字段 |
+| `0025_expected_chunks` | 标准问题 `expected_chunk_ids`，用于真实片段召回率 |
+| `0026_retrieval_log_ranks` | `chat_message_sources` 召回/精排前后排名，完善生产检索日志 |
+| `0027_reliability_and_scope` | 引用快照 `document_version`（版本已更新提示）+ 助手 `allow_all_knowledge_bases`（知识库范围语义） |
+| `0028_answer_jobs` | `answer_jobs` 生成任务表 + `documents.superseded_by_id`（替代版本）+ `document_chunks.parent_chunk_id`（父子切片） |
 
 启动或升级：执行 `./scripts/setup.sh`（内部会 `alembic upgrade head`）后 `./scripts/start.sh`。
 

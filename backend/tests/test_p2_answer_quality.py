@@ -92,6 +92,13 @@ def test_verify_answer_marks_unavailable_citations():
     assert not report.ok
 
 
+def test_verify_answer_flags_stale_version_citation():
+    report = verify_answer("部署流程包括构建镜像[1]。", [_source(1, "部署流程包括构建镜像")], stale={1: "VERSION_CHANGED"})
+    assert 1 in report.stale_citations
+    assert not report.ok
+    assert report.to_payload()["stale_citations"] == [1]
+
+
 def test_mark_unsupported_appends_inference_tag():
     sources = [_source(1, "部署流程")]
     report = verify_answer("这是没有依据的结论[1]。", sources)

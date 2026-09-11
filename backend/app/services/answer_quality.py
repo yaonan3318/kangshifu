@@ -17,12 +17,14 @@ NO_RELEVANT_DOCUMENT = "NO_RELEVANT_DOCUMENT"
 PERMISSION_RESTRICTED = "PERMISSION_RESTRICTED"
 LOW_RELEVANCE = "LOW_RELEVANCE"
 MODEL_UNAVAILABLE = "MODEL_UNAVAILABLE"
+KB_SCOPE_UNCONFIGURED = "KB_SCOPE_UNCONFIGURED"
 
 NO_ANSWER_MESSAGES = {
     NO_RELEVANT_DOCUMENT: "当前可访问的公司资料中没有找到足够依据。",
     PERMISSION_RESTRICTED: "检索到可能相关的资料，但当前账号没有访问权限，无法据此回答。",
     LOW_RELEVANCE: "检索到的资料与问题相关度较低，不足以形成可靠结论。",
     MODEL_UNAVAILABLE: "本地模型暂时不可用，请稍后重试。",
+    KB_SCOPE_UNCONFIGURED: "当前助手尚未配置可访问的资料范围，请联系管理员。",
 }
 
 # 置信度分级：页面只展示中文分级，不展示裸分数。
@@ -189,10 +191,15 @@ class CitationReport:
     invalid_numbers: list[int] = field(default_factory=list)
     unsupported_sentences: list[str] = field(default_factory=list)
     unavailable_citations: list[int] = field(default_factory=list)
+    # 版本已更新 / 位置不一致的引用；与“不可访问”区分，提示用户重新核对。
+    stale_citations: list[int] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
-        return not self.invalid_numbers and not self.unsupported_sentences and not self.unavailable_citations
+        return not (
+            self.invalid_numbers or self.unsupported_sentences or self.unavailable_citations
+            or self.stale_citations
+        )
 
     def to_payload(self) -> dict:
         return {
@@ -200,17 +207,22 @@ class CitationReport:
             "invalid_numbers": self.invalid_numbers,
             "unsupported_sentences": self.unsupported_sentences,
             "unavailable_citations": self.unavailable_citations,
+            "stale_citations": self.stale_citations,
             "ok": self.ok,
         }
 
 
-def verify_answer(answer: str, sources: list[AnswerSource], unavailable: dict[int, str] | None = None) -> CitationReport:
-    """校验引用编号、事实支持度与引用可用性；返回报告。"""
+def verify_answer(
+    answer: str, sources: list[AnswerSource], unavailable: dict[int, str] | None = None,
+    stale: dict[int, str] | None = None,
+) -> CitationReport:
+    """校验引用编号、真实片段、事实支持度、可用性与版本/位置一致性；返回报告。"""
     report = CitationReport()
     if not answer.strip():
         return report
     valid = {source.citation_number: source for source in sources}
     unavailable = unavailable or {}
+    stale = stale or {}
     sentences = [sentence.strip() for sentence in SENTENCE_PATTERN.findall(answer) if sentence.strip()]
     for sentence in sentences:
         report.checked += 1
@@ -237,7 +249,11 @@ def verify_answer(answer: str, sources: list[AnswerSource], unavailable: dict[in
     for number, reason in unavailable.items():
         if number not in report.unavailable_citations:
             report.unavailable_citations.append(number)
+    for number in stale:
+        if number not in report.stale_citations:
+            report.stale_citations.append(number)
     report.unavailable_citations.sort()
+    report.stale_citations.sort()
     return report
 
 

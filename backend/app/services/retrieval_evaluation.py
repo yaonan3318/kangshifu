@@ -17,8 +17,8 @@ from sqlalchemy.orm import Session
 from app.config import Settings
 from app.errors import AppError
 from app.models import (
-    Document, EvaluationSet, KnowledgeBase, RetrievalConfigVersion, RetrievalTestCase,
-    RetrievalTestRun,
+    Document, DocumentChunk, EvaluationSet, KnowledgeBase, RetrievalConfigVersion,
+    RetrievalTestCase, RetrievalTestRun,
 )
 from app.schemas.answer import AnswerRequest
 from app.schemas.retrieval_lab import (
@@ -35,15 +35,46 @@ METRIC_KEYS = (
     "keypoint_coverage", "citation_accuracy", "no_answer_accuracy",
 )
 
+# 耗时指标单独保存；越低越好，用于配置/运行对比时展示响应时间变化。
+LATENCY_KEYS = ("retrieval_ms", "first_token_latency_ms", "answer_latency_ms")
+
+METRIC_LABELS: dict[str, str] = {
+    "document_recall": "正确文档召回率",
+    "chunk_recall": "正确片段召回率",
+    "hit_rate_at_1": "Top1 命中率",
+    "hit_rate_at_3": "Top3 命中率",
+    "hit_rate_at_5": "Top5 命中率",
+    "keypoint_coverage": "答案关键点覆盖率",
+    "citation_accuracy": "引用正确率",
+    "no_answer_accuracy": "无答案判断准确率",
+    "retrieval_ms": "检索耗时(ms)",
+    "first_token_latency_ms": "首字耗时(ms)",
+    "answer_latency_ms": "完整回答耗时(ms)",
+    "forbidden_violation_count": "禁止召回违规数",
+}
+
+# 这些指标数值越低越好；其余越高越好。
+_LOWER_IS_BETTER = {"retrieval_ms", "first_token_latency_ms", "answer_latency_ms", "forbidden_violation_count"}
+
 # 导入表头别名（中英文均可）。
 HEADER_ALIASES: dict[str, set[str]] = {
     "name": {"name", "用例名称", "名称", "问题名称"},
     "question": {"question", "问题", "标准问题"},
     "knowledge_base": {"knowledge_base", "知识库", "知识库名称"},
-    "expected_documents": {"expected_documents", "正确文档", "预期文档", "应召回文档"},
+    "expected_documents": {
+        "expected_documents", "expected_document_ids", "正确文档", "预期文档", "应召回文档",
+    },
+    "expected_chunks": {
+        "expected_chunks", "expected_chunk_ids", "期望片段", "预期片段", "正确片段", "应召回片段",
+    },
     "must_cite_documents": {"must_cite_documents", "必须引用文档", "必须引用"},
-    "forbidden_documents": {"forbidden_documents", "禁止召回文档", "不应召回", "禁止文档"},
-    "answer_keypoints": {"answer_keypoints", "答案关键点", "关键点", "期望答案关键点"},
+    "forbidden_documents": {
+        "forbidden_documents", "excluded_documents", "excluded_document_ids",
+        "禁止召回文档", "不应召回", "禁止文档",
+    },
+    "answer_keypoints": {
+        "answer_keypoints", "expected_answer_points", "答案关键点", "关键点", "期望答案关键点",
+    },
     "expected_no_answer": {"expected_no_answer", "应无答案", "无答案"},
 }
 _TRUE_VALUES = {"1", "true", "yes", "y", "t", "是", "无答案", "应无答案"}
@@ -139,10 +170,12 @@ class RetrievalEvaluationService:
         self._validate_documents([
             *body.expected_document_ids, *body.must_cite_document_ids, *body.forbidden_document_ids,
         ])
+        self._validate_chunks(body.expected_chunk_ids)
         value = RetrievalTestCase(
             evaluation_set_id=set_id,
             name=body.name.strip(), question=body.question.strip(), knowledge_base_id=body.knowledge_base_id,
             expected_document_ids=[str(item) for item in body.expected_document_ids],
+            expected_chunk_ids=[str(item) for item in body.expected_chunk_ids],
             must_cite_document_ids=[str(item) for item in body.must_cite_document_ids],
             forbidden_document_ids=[str(item) for item in body.forbidden_document_ids],
             expected_keywords=[item.strip() for item in body.expected_keywords if item.strip()],
@@ -161,6 +194,9 @@ class RetrievalEvaluationService:
             if field in supplied and getattr(body, field) is not None:
                 self._validate_documents(getattr(body, field))
                 setattr(value, field, [str(item) for item in getattr(body, field)])
+        if "expected_chunk_ids" in supplied and body.expected_chunk_ids is not None:
+            self._validate_chunks(body.expected_chunk_ids)
+            value.expected_chunk_ids = [str(item) for item in body.expected_chunk_ids]
         for field in ("name", "question"):
             if field in supplied and getattr(body, field) is None:
                 raise AppError("INVALID_RETRIEVAL_CASE", f"{field} 不能为空", 400)
@@ -224,6 +260,7 @@ class RetrievalEvaluationService:
             raise AppError("IMPORT_MISSING_QUESTION", "缺少问题字段", 400)
         knowledge_base_id = self._resolve_knowledge_base(data.get("knowledge_base"))
         expected = self._resolve_documents(data.get("expected_documents"), knowledge_base_id)
+        expected_chunks = self._resolve_chunks(data.get("expected_chunks"))
         must_cite = self._resolve_documents(data.get("must_cite_documents"), knowledge_base_id)
         forbidden = self._resolve_documents(data.get("forbidden_documents"), knowledge_base_id)
         keypoints = self._split_tokens(data.get("answer_keypoints"))
@@ -231,7 +268,8 @@ class RetrievalEvaluationService:
         name = (data.get("name") or "").strip() or question[:40]
         return self.create_case(TestCaseCreate(
             name=name, question=question, knowledge_base_id=knowledge_base_id,
-            expected_document_ids=expected, must_cite_document_ids=must_cite,
+            expected_document_ids=expected, expected_chunk_ids=expected_chunks,
+            must_cite_document_ids=must_cite,
             forbidden_document_ids=forbidden, expected_answer_keypoints=keypoints,
             expected_no_answer=no_answer,
         ), set_id=set_id)
@@ -283,6 +321,19 @@ class RetrievalEvaluationService:
                 raise AppError("IMPORT_DOCUMENT_NOT_FOUND", f"文档不存在：{token}", 400)
             result.append(document_id)
         return list(dict.fromkeys(result))
+
+    def _resolve_chunks(self, value: str | None) -> list[uuid.UUID]:
+        """解析期望片段；只接受 chunk_id（UUID），并校验片段确实存在。"""
+        result: list[uuid.UUID] = []
+        for token in self._split_tokens(value):
+            try:
+                result.append(uuid.UUID(token))
+            except ValueError as exc:
+                raise AppError("IMPORT_CHUNK_NOT_FOUND", f"片段 ID 不是有效 UUID：{token}", 400) from exc
+        result = list(dict.fromkeys(result))
+        if result:
+            self._validate_chunks(result)
+        return result
 
     # ------------------------------------------------------------ 配置版本
 
@@ -388,39 +439,65 @@ class RetrievalEvaluationService:
         knowledge_base_id = case.knowledge_base_id or evaluation_set.knowledge_base_id
         search = SearchService(self.session, self.settings, user=self.user, config=config)
         outcome = search.search_with_diagnostics(SearchRequest(
-            query=case.question, knowledge_base_id=knowledge_base_id, limit=config.final_limit,
+            query=case.question, knowledge_base_id=knowledge_base_id, limit=limit,
         ))
-        returned = outcome.items
-        returned_doc_ids = list(dict.fromkeys(str(item.document_id) for item in returned))
-        expected = {str(item) for item in case.expected_document_ids}
-        must_cite = {str(item) for item in case.must_cite_document_ids}
-        forbidden = {str(item) for item in case.forbidden_document_ids}
-
-        correct_chunks = sum(1 for item in returned if str(item.document_id) in expected)
-        result = {
-            "case_id": str(case.id), "name": case.name, "question": case.question,
-            "returned_document_ids": returned_doc_ids,
-            "forbidden_hits": [item for item in returned_doc_ids if item in forbidden],
-            "document_recall": _ratio(len(expected & set(returned_doc_ids)), len(expected)),
-            "chunk_recall": min(1.0, _ratio(correct_chunks, len(expected))) if expected else 1.0,
-            "hit_rate_at_1": 1.0 if expected & set(returned_doc_ids[:1]) else (1.0 if not expected else 0.0),
-            "hit_rate_at_3": 1.0 if expected & set(returned_doc_ids[:3]) else (1.0 if not expected else 0.0),
-            "hit_rate_at_5": 1.0 if expected & set(returned_doc_ids[:5]) else (1.0 if not expected else 0.0),
-            "citation_accuracy": _ratio(len(must_cite & set(returned_doc_ids)), len(must_cite)),
-            "no_answer_accuracy": 1.0 if case.expected_no_answer == (not returned) else 0.0,
-            "retrieval_ms": outcome.diagnostics.timings_ms.get("total", 0.0),
-            "first_token_latency_ms": outcome.diagnostics.timings_ms.get("total", 0.0),
-            "answer_latency_ms": outcome.diagnostics.timings_ms.get("total", 0.0),
-            "answer_mode": "evidence",
-            "mode": outcome.diagnostics.mode, "warning": outcome.diagnostics.warning,
-        }
-        evidence = "\n".join(item.content.lower() for item in returned)
-        result["keypoint_coverage"] = self._keypoint_coverage(case.expected_answer_keypoints, evidence)
-
+        result = self._score_case(case, outcome.items, outcome.diagnostics)
         if include_answers:
             answer = await self._generate_answer(case, knowledge_base_id, config)
             result.update(answer)
         return result
+
+    @staticmethod
+    def _score_case(case: RetrievalTestCase, returned: list[SearchResult], diagnostics=None) -> dict:
+        """按“片段级”真实命中计算逐用例指标；检索阶段不产生首字/回答耗时。"""
+        returned_doc_ids = list(dict.fromkeys(str(item.document_id) for item in returned))
+        returned_chunk_ids = [str(item.chunk_id) for item in returned]
+        expected_docs = {str(item) for item in case.expected_document_ids}
+        expected_chunks = {str(item) for item in case.expected_chunk_ids}
+        must_cite = {str(item) for item in case.must_cite_document_ids}
+        forbidden = {str(item) for item in case.forbidden_document_ids}
+
+        matched_chunks = expected_chunks & set(returned_chunk_ids)
+        # 片段召回率 = 命中的期望片段数 / 期望片段总数；未配置期望片段时视为满分。
+        chunk_recall = _ratio(len(matched_chunks), len(expected_chunks))
+        # Top-K 命中率优先按片段计算；没有期望片段时退回文档级，避免指标失真。
+        if expected_chunks:
+            hit1 = RetrievalEvaluationService._hit_rate(expected_chunks, returned_chunk_ids, 1)
+            hit3 = RetrievalEvaluationService._hit_rate(expected_chunks, returned_chunk_ids, 3)
+            hit5 = RetrievalEvaluationService._hit_rate(expected_chunks, returned_chunk_ids, 5)
+        else:
+            hit1 = RetrievalEvaluationService._hit_rate(expected_docs, returned_doc_ids, 1)
+            hit3 = RetrievalEvaluationService._hit_rate(expected_docs, returned_doc_ids, 3)
+            hit5 = RetrievalEvaluationService._hit_rate(expected_docs, returned_doc_ids, 5)
+        timings = diagnostics.timings_ms if diagnostics is not None else {}
+        evidence = "\n".join(item.content.lower() for item in returned)
+        return {
+            "case_id": str(case.id), "name": case.name, "question": case.question,
+            "returned_document_ids": returned_doc_ids,
+            "returned_chunk_ids": returned_chunk_ids,
+            "expected_chunk_ids": sorted(expected_chunks),
+            "matched_chunk_ids": sorted(matched_chunks),
+            "forbidden_hits": [item for item in returned_doc_ids if item in forbidden],
+            "document_recall": _ratio(len(expected_docs & set(returned_doc_ids)), len(expected_docs)),
+            "chunk_recall": chunk_recall,
+            "hit_rate_at_1": hit1, "hit_rate_at_3": hit3, "hit_rate_at_5": hit5,
+            "citation_accuracy": _ratio(len(must_cite & set(returned_doc_ids)), len(must_cite)),
+            "no_answer_accuracy": 1.0 if case.expected_no_answer == (not returned) else 0.0,
+            "keypoint_coverage": RetrievalEvaluationService._keypoint_coverage(case.expected_answer_keypoints, evidence),
+            # 检索阶段还没有生成答案，首字/完整回答耗时记为 0，由回答阶段覆盖。
+            "retrieval_ms": timings.get("total", 0.0),
+            "first_token_latency_ms": 0.0,
+            "answer_latency_ms": 0.0,
+            "answer_mode": "evidence",
+            "mode": diagnostics.mode if diagnostics is not None else None,
+            "warning": diagnostics.warning if diagnostics is not None else None,
+        }
+
+    @staticmethod
+    def _hit_rate(expected: set[str], returned: list[str], k: int) -> float:
+        if not expected:
+            return 1.0
+        return 1.0 if expected & set(returned[:k]) else 0.0
 
     async def _generate_answer(
         self, case: RetrievalTestCase, knowledge_base_id: uuid.UUID | None, config: RetrievalConfig,
@@ -457,7 +534,7 @@ class RetrievalEvaluationService:
             "keypoint_coverage": self._keypoint_coverage(case.expected_answer_keypoints, answer_text.lower()),
             "citation_accuracy": _ratio(len(must_cite & set(cited)), len(must_cite)),
             "no_answer_accuracy": 1.0 if case.expected_no_answer == no_answer else 0.0,
-            "first_token_latency_ms": metrics.get("llm_first_token_ms") or metrics.get("retrieval_ms") or 0.0,
+            "first_token_latency_ms": metrics.get("llm_first_token_ms") or 0.0,
             "answer_latency_ms": metrics.get("total_ms") or 0.0,
         }
 
@@ -499,8 +576,44 @@ class RetrievalEvaluationService:
         }
         left_config = RetrievalConfig.from_dict(left.config_snapshot)
         right_config = RetrievalConfig.from_dict(right.config_snapshot)
-        left_cases = {item.get("case_id"): item for item in left.results}
-        right_cases = {item.get("case_id"): item for item in right.results}
+        changes = self._case_changes(left.results, right.results)
+        return {
+            "left": left, "right": right, "metric_deltas": deltas,
+            "metric_changes": self._metric_changes(left.metrics, right.metrics),
+            "config_differences": config_diff(left_config, right_config),
+            "case_changes": changes,
+        }
+
+    @staticmethod
+    def _metric_changes(left_metrics: dict, right_metrics: dict) -> list[dict]:
+        """逐指标展示旧值、新值、差值、提升或下降，以及响应时间变化。"""
+        keys = [*METRIC_KEYS, "forbidden_violation_count", *LATENCY_KEYS]
+        result: list[dict] = []
+        for key in keys:
+            left_value = float(left_metrics.get(key, 0.0))
+            right_value = float(right_metrics.get(key, 0.0))
+            delta = round(right_value - left_value, 4)
+            if delta == 0:
+                direction, improved = "same", None
+            elif key in _LOWER_IS_BETTER:
+                direction = "down" if delta < 0 else "up"
+                improved = delta < 0
+            else:
+                direction = "up" if delta > 0 else "down"
+                improved = delta > 0
+            result.append({
+                "key": key, "label": METRIC_LABELS.get(key, key),
+                "left": round(left_value, 4), "right": round(right_value, 4),
+                "delta": delta, "direction": direction, "improved": improved,
+                "unit": "ms" if key in LATENCY_KEYS else "ratio",
+                "lower_is_better": key in _LOWER_IS_BETTER,
+            })
+        return result
+
+    @staticmethod
+    def _case_changes(left_results: list[dict], right_results: list[dict]) -> list[dict]:
+        left_cases = {item.get("case_id"): item for item in left_results}
+        right_cases = {item.get("case_id"): item for item in right_results}
         changes = []
         for case_id in sorted(set(left_cases) | set(right_cases)):
             left_case = left_cases.get(case_id, {})
@@ -513,14 +626,17 @@ class RetrievalEvaluationService:
                 "document_recall_delta": round(
                     float(right_case.get("document_recall", 0.0)) - float(left_case.get("document_recall", 0.0)), 4,
                 ),
+                "left_chunk_recall": left_case.get("chunk_recall"),
+                "right_chunk_recall": right_case.get("chunk_recall"),
+                "chunk_recall_delta": round(
+                    float(right_case.get("chunk_recall", 0.0)) - float(left_case.get("chunk_recall", 0.0)), 4,
+                ),
                 "left_no_answer_accuracy": left_case.get("no_answer_accuracy"),
                 "right_no_answer_accuracy": right_case.get("no_answer_accuracy"),
+                "left_answer_latency_ms": left_case.get("answer_latency_ms"),
+                "right_answer_latency_ms": right_case.get("answer_latency_ms"),
             })
-        return {
-            "left": left, "right": right, "metric_deltas": deltas,
-            "config_differences": config_diff(left_config, right_config),
-            "case_changes": changes,
-        }
+        return changes
 
     # ------------------------------------------------------------ 辅助
 
@@ -529,6 +645,12 @@ class RetrievalEvaluationService:
             value = self.session.scalar(select(Document.id).where(Document.id == document_id, Document.deleted_at.is_(None)))
             if not value:
                 raise AppError("EXPECTED_DOCUMENT_UNAVAILABLE", f"预期文档不存在或已删除：{document_id}", 400)
+
+    def _validate_chunks(self, chunk_ids) -> None:
+        for chunk_id in chunk_ids:
+            value = self.session.scalar(select(DocumentChunk.id).where(DocumentChunk.id == chunk_id))
+            if not value:
+                raise AppError("EXPECTED_CHUNK_UNAVAILABLE", f"预期片段不存在：{chunk_id}", 400)
 
     def _require_knowledge_base(self, knowledge_base_id: uuid.UUID) -> None:
         if self.session.scalar(select(KnowledgeBase.id).where(KnowledgeBase.id == knowledge_base_id)) is None:

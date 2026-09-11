@@ -88,6 +88,9 @@ class BatchService:
                     version_number=(previous.version_number + 1) if previous else 1)
                 promoted = self.storage.promote(staged, document.id, kind.extension); document.stored_path = promoted
                 document.jobs.append(ProcessingJob(job_type=JobType.PARSE, status=JobStatus.QUEUED))
+                # P2-6：回填替代版本关系。
+                if previous is not None:
+                    previous.superseded_by_id = document.id
                 row.document, row.upload_status, row.processing_status = document, BatchUploadStatus.UPLOADED, BatchProcessingStatus.WAITING
                 self.session.add(document)
             self.session.commit()

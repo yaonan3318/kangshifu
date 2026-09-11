@@ -86,5 +86,11 @@ class ChatMessageSource(Base):
     content_snapshot: Mapped[str] = mapped_column(Text)
     location_snapshot: Mapped[dict] = mapped_column(JSONB, default=dict)
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 检索日志：召回排名与精排前后排名，便于追溯排序变化。
+    retrieval_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pre_rerank_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    post_rerank_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # P2-2：回答时引用的文档版本，用于判断“版本已更新”。
+    document_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     message: Mapped[ChatMessage] = relationship(back_populates="sources")

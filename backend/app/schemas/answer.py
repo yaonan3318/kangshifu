@@ -2,12 +2,13 @@
 
 import uuid
 
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from app.models.document import DocumentStatus
 from app.schemas.search import QueryRewriteInfo
 
 
@@ -32,9 +33,19 @@ class AnswerRequest(BaseModel):
     document_name: str | None = Field(default=None, max_length=200)
     created_from: date | None = None
     created_to: date | None = None
+    # P2-1 结构化元数据过滤；权限过滤始终先于这些条件执行。
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    department_id: uuid.UUID | None = None
+    owner_user_id: uuid.UUID | None = None
+    document_status: DocumentStatus | None = None
+    relative_path: str | None = Field(default=None, max_length=2048)
+    version_number: int | None = Field(default=None, ge=1)
+    valid_only: bool = False
     # P2-1 检索增强开关；为空时使用检索配置版本中的设置。
     use_query_rewrite: bool | None = None
     use_multi_query: bool | None = None
+    # P2-5：幂等请求 ID；同一 request_id 不会重复创建生成任务。
+    request_id: str | None = Field(default=None, max_length=128)
 
 
 class KnowledgeScope(str, Enum):
@@ -68,11 +79,34 @@ class AnswerSource(BaseModel):
     ocr_confidence: float | None
     match_type: str
     score: float | None = None
+    # 检索日志：召回（RRF 融合后、精排前）排名与精排后排名，用于追溯排序变化。
+    retrieval_rank: int | None = None
+    pre_rerank_rank: int | None = None
+    post_rerank_rank: int | None = None
 
 
 class AnswerWarning(BaseModel):
     code: str
     message: str
+
+
+class AnswerJobOut(BaseModel):
+    """P2-5 生成任务状态；页面刷新/断线后可据此恢复。"""
+
+    id: uuid.UUID
+    conversation_id: uuid.UUID | None = None
+    message_id: uuid.UUID | None = None
+    status: str
+    current_stage: str | None = None
+    partial_content: str = ""
+    event_cursor: int = 0
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    cancelled_at: datetime | None = None
 
 
 class OllamaStatus(BaseModel):

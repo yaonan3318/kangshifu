@@ -24,6 +24,7 @@ from app.models.assistant import DEFAULT_ASSISTANT_ID, Assistant, assistant_know
 from app.models.feedback import (
     AnswerFeedback, AnswerFeedbackDocument, DocumentFeedbackStats, FeedbackRating,
 )
+from app.models.answer_job import AnswerJob, AnswerJobStatus, TERMINAL_STATUSES
 
 __all__ = [
     "ApprovalStatus", "Document", "DocumentStatus", "DocumentChunk", "HarnessApproval", "HarnessStep",
@@ -38,4 +39,5 @@ __all__ = [
     "AclPermission", "AuthSession", "Department", "DocumentAcl", "DocumentVisibility",
     "Role", "SubjectType", "User", "user_roles", "AuditLog", "AnswerFeedback", "FeedbackRating",
     "DocumentFeedbackStats", "AnswerFeedbackDocument", "Permission", "role_permissions",
+    "AnswerJob", "AnswerJobStatus", "TERMINAL_STATUSES",
 ]

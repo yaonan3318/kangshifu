@@ -71,6 +71,9 @@ class DocumentService:
             promoted_path = self.storage.promote(staged, document.id, file_type.extension)
             document.stored_path = promoted_path
             document.jobs.append(ProcessingJob(job_type=JobType.PARSE, status=JobStatus.QUEUED))
+            # P2-6：回填替代版本关系，便于判断旧版本已被替代。
+            if previous is not None:
+                previous.superseded_by_id = document.id
             self.session.add(document)
             self.session.commit()
             self.session.refresh(document)

@@ -159,6 +159,13 @@ P2-1 起支持结构化元数据过滤（权限过滤始终先执行）：
 当默认检索配置版本开启 Query Rewrite / Multi-query 时，服务会先做上下文补全与查询改写，
 再分别召回并做 RRF 融合；`diagnostics.queries` 返回实际使用的检索表达，`diagnostics.retrieval_query`
 返回改写后的主查询。`SearchResult` 额外返回 `pre_rerank_rank` / `post_rerank_rank`（重排前后名次）。
+管理员维护的词典（同义词、缩写、专有名词、中英文映射 `CROSS_LANGUAGE`）同时作用于关键词与向量两路召回。
+
+生产检索顺序为：权限过滤 → 元数据过滤 → 上下文补全 → Query Rewrite → Multi-query →
+关键词/向量混合召回 → `chunk_id` 去重 → RRF 融合 → Reranker（不可用时降级为 RRF）→ 最终片段截断。
+`chat_message_sources` 保存每个引用的 `retrieval_rank`（召回/RRF 后名次）、`pre_rerank_rank` 与
+`post_rerank_rank`，`chat_messages.metrics` 保存原始问题、补全后问题、改写问题、多查询列表、
+各阶段耗时与最终使用片段。
 
 ## RAG 知识问答
 
@@ -184,9 +191,19 @@ curl -N -X POST http://127.0.0.1:8000/api/answer/stream \
     "extension": null,
     "document_name": null,
     "created_from": null,
-    "created_to": null
+    "created_to": null,
+    "tags": [],
+    "department_id": null,
+    "owner_user_id": null,
+    "document_status": null,
+    "relative_path": null,
+    "version_number": null,
+    "valid_only": false
   }'
 ```
+
+请求体与 `/api/search` 一样支持 P2-1 结构化过滤（`tags`、`department_id`、`owner_user_id`、
+`document_status`、`relative_path`、`version_number`、`valid_only`）；权限过滤始终先执行。
 
 SSE 每个消息包含 `event:` 类型和 `data:` JSON。可能出现：
 
@@ -206,9 +223,25 @@ SSE 每个消息包含 `event:` 类型和 `data:` JSON。可能出现：
 
 典型本地流程是 `stage(retrieving) → sources → stage(local_generating) → delta... → done`。DeepSeek 增强成功时会继续出现 `stage(deepseek_enhancing) → replace → delta... → done`。P2-2 在生成结束后追加 `confidence` / `citation_check`，资料不足时追加 `no_answer` 并用固定提示替换答案（缺少依据的句子标记为“推断”）。
 
-`chat_messages.metrics` 会保存 `confidence`、`citation_check`、`no_answer`、`question_type` 等字段，历史引用接口额外返回 `version_number`、`matched_keywords`、`can_download`、`extension` 供追溯展示。
+`chat_messages.metrics` 会保存 `confidence`、`citation_check`、`no_answer`、`question_type`、
+`flow_steps`（逐节点状态/耗时/安全摘要）与 `node_timings` 等字段，历史引用接口额外返回
+`version_number`、`cited_version`、`matched_keywords`、`can_download`、`extension` 供追溯展示。
+引用校验会检查编号是否存在、是否对应真实片段、文档是否可访问/未删除停用，以及版本与
+页码/幻灯片/工作表是否一致；版本变化的引用在历史引用中以 `status=VERSION_CHANGED`（“版本已更新”）
+返回，不可访问的引用不返回正文快照。
 
 `scope` 表示答案依据：`INTERNAL` 为较明确的内部资料，`INTERNAL_LIMITED` 为有限的语义证据，`GENERAL` 为无内部资料时的 DeepSeek 通用知识，`NONE` 为未找到内部答案。DeepSeek 未配置或调用失败时会发送 `warning`，并保留千问本地答案。
+
+P2-5 生成任务（Answer Job）：`POST /api/answer/stream` 会创建一个持久化生成任务，生成在后台进行，不依赖浏览器连接。请求体可带 `request_id` 作为幂等键（相同 `request_id` 复用同一任务，不重复创建消息）。响应头返回 `X-Answer-Job-Id`。页面刷新或断网后可按游标续传：
+
+```text
+GET  /api/answer/jobs/{job_id}                 # 任务状态/阶段/部分内容
+GET  /api/answer/jobs/{job_id}/stream          # 续传（请求头 Last-Event-ID=已接收字符数）
+POST /api/answer/jobs/{job_id}/cancel          # 仅用户显式“停止生成”时取消
+GET  /api/answer/sessions/{session_id}/active-job  # 会话中未完成任务（无则返回 null）
+```
+
+任务状态为 `PENDING/RETRIEVING/GENERATING/VERIFYING/COMPLETED/FAILED/CANCELLED`。切换标签页或关闭连接不会取消任务；服务重启后未完成任务会标记为 `FAILED`（`ANSWER_INTERRUPTED`）并同步消息状态，用户可重新生成。
 
 ## 助手接口
 
@@ -228,11 +261,27 @@ DELETE /api/assistants/{id}
 以及知识库范围、召回数量、温度、DeepSeek/Harness 策略。问答请求只需传 `assistant_id`，
 运行策略由服务端助手配置决定，用户端不展示这些技术选项。
 
+DeepSeek 有三个相互独立的字段：`use_deepseek_allowed`（是否允许该助手使用 DeepSeek）、
+`default_deepseek_enabled`（新会话默认状态）、`deepseek_enabled`（实际启用）。只有三者都满足
+且内容允许外发时才会调用 DeepSeek；修改任意一个开关都不会联动修改另外两个。
+
+知识库范围语义由 `allow_all_knowledge_bases` 与 `knowledge_base_ids` 共同决定：
+`allow_all_knowledge_bases=true` 表示全部启用知识库（综合助手）；否则只检索显式绑定的知识库；
+两者都为空表示“尚未配置资料范围”，该助手不会检索任何知识库，问答返回
+`KB_SCOPE_UNCONFIGURED` 固定提示，不会默认放大到全部知识库。`PUT /knowledge-bases`
+仅更新绑定列表，范围开关通过 `POST/PATCH /api/assistants` 的 `allow_all_knowledge_bases` 提交。
+
+`internet_enabled` 为预留能力：服务端配置 `COMPANY_SEARCH_INTERNET_SEARCH_ENABLED=false` 时
+不会发起任何联网请求，欢迎页返回 `internet_configured=false`，问答会发送
+`INTERNET_NOT_CONFIGURED` 提示，绝不假装已联网。
+
 `GET /api/assistants/{id}/welcome` 返回：能做什么、不能做什么、推荐问题、可访问资料范围
 （`knowledge_scope`）、最近热门问题、是否允许通用知识（`general_knowledge_allowed`）与
 运维任务（`operations_allowed`，仅管理员为 true）。
 
 ## 文档理解与切片
+
+P2-6：PDF 解析会提取内嵌图片并 OCR（文字型 PDF 也会处理），再按版面距离关联图注；父子切片命中子片段时返回父片段内容；文档保存 `superseded_by_id`（替代版本）与作者/部门/主题/生效失效时间/关联文档等元数据，并可通过检索过滤。切片预览与实际索引使用同一套 `chunk_blocks` 函数。
 
 按知识库配置切片策略（`chunking_config`，随 `POST/PATCH /api/knowledge-bases` 提交）：
 
@@ -302,9 +351,17 @@ POST   /api/chatflows/{id}/debug           # 调试运行，返回逐节点耗�
 ```
 
 图结构为固定画布：`{"start_node_id": "start", "nodes": [{id,type,name,enabled,config,next}]}`；
-条件节点用 `config.branches`（`when` → `next`）与 `config.default_next` 分支。助手通过
-`chatflow_id` 绑定已发布流程，问答时按节点开关执行，并把逐节点耗时写入
-`chat_messages.metrics.node_timings`。
+条件节点用 `config.branches`（`when` → `next`）与 `config.default_next` 分支。节点类型包括
+`start`、`classify`、`context_completion`、`query_rewrite`、`multi_query`、`knowledge_search`、
+`reranker`、`condition`、`local_model`、`deepseek`、`harness`、`answer_check`、`final_answer`
+（兼容旧图的 `question_classify`/`retrieval`/`rerank`）。
+
+正式问答与调试运行共用同一个 `ChatflowRunner` 执行引擎：从 `start` 起按 `next`/`on_success`/
+`branches` 执行，每个节点记录开始/结束时间、耗时、状态与安全摘要；支持 `on_failure`、
+`on_timeout`、`fallback_node`，并防止未知节点、无终止节点、死循环与超过最大节点数。助手通过
+`chatflow_id` 绑定已发布流程；未发布或未绑定时使用安全默认流程。逐节点执行记录写入
+`chat_messages.metrics.flow_steps` 与 `node_timings`，管理员可查看，普通用户只看到简化阶段。
+Harness 的 Kubernetes 写操作仍由 HarnessService 逐次人工确认。
 
 ## 批量导入接口
 
@@ -404,7 +461,8 @@ POST   /api/chunks/{id}/restore-original
 POST   /api/retrieval-lab/inspect   # body: query, knowledge_base_id?, limit?, history?
 ```
 
-中文检索词典（管理员维护同义词/缩写/专有名词）：
+中文检索词典（管理员维护同义词/缩写/专有名词/中英文映射，类别为
+`SYNONYM`/`ABBREVIATION`/`PROPER_NOUN`/`CROSS_LANGUAGE`）：
 
 ```text
 GET    /api/retrieval-lab/dictionaries?category=&enabled=
@@ -448,4 +506,15 @@ GET    /api/retrieval-lab/runs/{id}
 GET    /api/retrieval-lab/runs/compare?left=&right=
 ```
 
-`inspect` 返回规范化问题、扩展词、实际模式、降级提示、耗时，以及关键词、向量、RRF、精排和最终上下文各阶段候选；开启改写时额外返回 `query_rewrite`（原始问题、补全后问题、实际检索问题、是否使用上下文）与 `queries`（多查询列表）。运行记录保存配置快照与逐用例明细；`runs/compare` 返回指标变化、配置差异与逐用例变化。CSV/Excel 导入表头支持中英文别名，文档列可用 UUID 或文件名。
+`inspect` 返回规范化问题、扩展词、实际模式、降级提示、耗时，以及关键词、向量、RRF、精排和最终上下文各阶段候选；开启改写时额外返回 `query_rewrite`（原始问题、补全后问题、实际检索问题、是否使用上下文）与 `queries`（多查询列表）。
+
+标准问题支持 `expected_document_ids`、`expected_chunk_ids`、`must_cite_document_ids`、
+`forbidden_document_ids`（导入别名 `excluded_document_ids`）、`expected_answer_keypoints`
+（导入别名 `expected_answer_points`）与 `expected_no_answer`。片段召回率按
+`命中的期望 chunk_id 数 / 期望 chunk_id 总数` 计算，不使用命中文档数替代。
+
+运行记录保存配置快照与逐用例明细（含 `returned_chunk_ids`、`matched_chunk_ids`）。
+`runs/compare` 返回 `metric_changes`，逐指标给出旧值、新值、差值、提升/下降（耗时下降视为提升）
+以及响应时间变化，同时返回配置差异与逐用例变化。`config-versions/compare` 的差异项也包含
+`delta` 与 `direction`。CSV/Excel 导入表头支持中英文别名，文档列可用 UUID 或文件名，
+期望片段列使用 chunk_id（UUID）。

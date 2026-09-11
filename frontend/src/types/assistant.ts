@@ -21,6 +21,7 @@ export interface AssistantRecord {
   no_answer_policy: string
   capabilities: string[]
   limitations: string[]
+  allow_all_knowledge_bases: boolean
   chatflow_id: string | null
   enabled: boolean
   created_at: string
@@ -40,9 +41,11 @@ export interface AssistantWelcome {
   recent_questions: string[]
   knowledge_bases: Array<{ id: string; name: string }>
   knowledge_scope: string
+  knowledge_scope_configured: boolean
   general_knowledge_allowed: boolean
   operations_allowed: boolean
   internet_enabled: boolean
+  internet_configured: boolean
 }
 
 export interface AssistantListResponse {

@@ -1,6 +1,6 @@
 import { ApiError } from './documents'
 import type { ApiErrorBody } from '../types/documents'
-import type { AnswerEvent, AnswerStatus, AnswerTurn } from '../types/answer'
+import type { AnswerEvent, AnswerJob, AnswerStatus, AnswerTurn } from '../types/answer'
 
 export async function getAnswerStatus(): Promise<AnswerStatus> {
   const response = await fetch('/api/answer/status')
@@ -28,17 +28,21 @@ export interface StreamAnswerInput {
   k8sContext?: string
   k8sNamespace?: string
   deploymentYaml?: string
+  // P2-5：幂等请求 ID，防止重复提交创建多个生成任务。
+  requestId?: string
 }
 
 export interface StreamAnswerOutcome {
   sessionId: string | null
   messageId: string | null
+  jobId: string | null
 }
 
 export async function streamAnswer(
   input: StreamAnswerInput,
   signal: AbortSignal,
   onEvent: (event: AnswerEvent) => void,
+  onStarted?: (outcome: StreamAnswerOutcome) => void,
 ): Promise<StreamAnswerOutcome> {
   const response = await fetch('/api/answer/stream', {
     method: 'POST', signal,
@@ -55,6 +59,7 @@ export async function streamAnswer(
       k8s_namespace: input.k8sNamespace || null,
       deployment_yaml: input.deploymentYaml || null,
       history: input.history,
+      request_id: input.requestId || null,
     }),
   })
   if (!response.ok || !response.body) {
@@ -64,9 +69,46 @@ export async function streamAnswer(
   const outcome: StreamAnswerOutcome = {
     sessionId: response.headers.get('X-Chat-Session-Id'),
     messageId: response.headers.get('X-Chat-Message-Id'),
+    jobId: response.headers.get('X-Answer-Job-Id'),
   }
+  onStarted?.(outcome)
   await consumeAnswerResponse(response, onEvent)
   return outcome
+}
+
+export async function getAnswerJob(jobId: string): Promise<AnswerJob> {
+  const response = await fetch(`/api/answer/jobs/${jobId}`)
+  if (response.ok) return response.json()
+  const body = (await response.json().catch(() => ({}))) as ApiErrorBody
+  throw new ApiError(body.error?.code ?? 'JOB_FAILED', body.error?.message ?? '无法读取生成任务')
+}
+
+export async function cancelAnswerJob(jobId: string): Promise<AnswerJob> {
+  const response = await fetch(`/api/answer/jobs/${jobId}/cancel`, { method: 'POST' })
+  if (response.ok) return response.json()
+  const body = (await response.json().catch(() => ({}))) as ApiErrorBody
+  throw new ApiError(body.error?.code ?? 'JOB_FAILED', body.error?.message ?? '无法取消生成任务')
+}
+
+export async function getActiveAnswerJob(sessionId: string): Promise<AnswerJob | null> {
+  const response = await fetch(`/api/answer/sessions/${sessionId}/active-job`)
+  if (response.ok) return response.json()
+  if (response.status === 404) return null
+  const body = (await response.json().catch(() => ({}))) as ApiErrorBody
+  throw new ApiError(body.error?.code ?? 'JOB_FAILED', body.error?.message ?? '无法读取生成任务')
+}
+
+export async function resumeAnswerJob(
+  jobId: string,
+  cursor: number,
+  signal: AbortSignal,
+  onEvent: (event: AnswerEvent) => void,
+): Promise<void> {
+  const response = await fetch(`/api/answer/jobs/${jobId}/stream`, {
+    method: 'GET', signal,
+    headers: { Accept: 'text/event-stream', 'Last-Event-ID': String(cursor) },
+  })
+  await consumeAnswerResponse(response, onEvent)
 }
 
 export async function consumeAnswerResponse(response: Response, onEvent: (event: AnswerEvent) => void): Promise<void> {

@@ -194,6 +194,7 @@ def compare_runs(
         left=TestRunResponse.model_validate(result["left"]),
         right=TestRunResponse.model_validate(result["right"]),
         metric_deltas=result["metric_deltas"],
+        metric_changes=result.get("metric_changes", []),
         config_differences=result["config_differences"],
         case_changes=result["case_changes"],
     )

@@ -4,6 +4,8 @@
 - 记录每次问答各阶段耗时与 token 数（answer/stream 把 metrics 持久化到 chat_messages）
 - 相同问题、资料版本与检索配置未变化时命中内存缓存，避免重复检索与生成
 - 上下文裁剪限制片段数量，保证本地模型在 Mac M3 Pro 上可用
+- P2-4：正式问答由助手绑定的已发布 Chatflow 驱动，未绑定时使用安全默认流程，
+  与调试运行共用同一执行引擎（app/services/rag_flow.py）。
 """
 
 from collections import OrderedDict
@@ -17,19 +19,16 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.llm import DeepSeekClient, GenerationMessage, LlmError, OllamaClient
-from app.models import Assistant, Chatflow, Document, DocumentChunk, DocumentStatus
+from app.models import Assistant, Chatflow, Document, DocumentChunk, DocumentStatus, KnowledgeBase
 from app.schemas.answer import (
-    AnswerEvent, AnswerProvider, AnswerRequest, AnswerSource, AnswerStatusResponse,
-    AnswerWarning, KnowledgeScope,
+    AnswerEvent, AnswerProvider, AnswerRequest, AnswerSource, AnswerStatusResponse, KnowledgeScope,
 )
 from app.schemas.search import QueryRewriteInfo, SearchRequest, SearchResult
 from app.services.answer_quality import (
-    GENERAL, INSUFFICIENT, LOW_RELEVANCE, MODEL_UNAVAILABLE, NO_RELEVANT_DOCUMENT,
-    PERMISSION_RESTRICTED, QUESTION_TYPES, classify_question, compute_confidence,
-    mark_unsupported, no_answer_payload, template_instruction, verify_answer,
+    GENERAL, LOW_RELEVANCE, NO_RELEVANT_DOCUMENT, PERMISSION_RESTRICTED, template_instruction,
 )
 from app.services.audit import SENSITIVE_LEVELS_EXTERNAL_BLOCKED
-from app.services.chatflow import ChatflowPlan, ChatflowService, build_plan
+from app.services.chatflow import ChatflowPlan, ChatflowService
 from app.services.query_rewrite import QueryRewriteService
 from app.services.retrieval_config import RetrievalConfig
 from app.services.search import SearchService
@@ -66,18 +65,8 @@ class RagService:
         )
 
     async def stream(self, request: AnswerRequest) -> AsyncIterator[AnswerEvent]:
-        """逐阶段产生 SSE 事件；DeepSeek 失败时保留已生成的本地答案。
-
-        事件顺序：
-        stage(retrieving) -> sources -> [stage(local_generating) + deltas]
-        -> [warning/stage(deepseek_enhancing) + deltas] -> metrics -> done
-        """
+        """按助手绑定的已发布 Chatflow（未绑定时安全默认流程）执行问答并流式返回事件。"""
         cfg = self._assistant_config(request)
-        plan = build_plan(cfg.get("chatflow"))
-        if plan is not None:
-            # 绑定 Chatflow 时以图中节点开关为准；未绑定时沿用运行时配置。
-            self.config = self._apply_plan(self.config, plan)
-            self.search_service.config = self.config
         cache_key: str | None = None
         if self._cache_eligible(request, cfg):
             cache_key = self._cache_key(request, cfg)
@@ -105,246 +94,10 @@ class RagService:
                     source_count=len(hit["sources"]), question_type=quality.get("question_type"),
                 )
                 return
+        from app.services.rag_flow import run_production_flow
 
-        started = perf_counter()
-        yield AnswerEvent(type="stage", stage="understanding")
-        # 助手可以指定固定答案模板；AUTO 时按问题类型自动分类。
-        configured_template = cfg.get("answer_template") or "AUTO"
-        if configured_template != "AUTO":
-            question_type = configured_template
-        elif plan is not None and not plan.classify_enabled:
-            question_type = GENERAL
-        else:
-            question_type = classify_question(request.question)
-        rewrite_info, retrieval_query, queries, rewrite_ms = await self._prepare_queries(request)
-        if rewrite_info is not None:
-            yield AnswerEvent(type="query_rewrite", query_rewrite=rewrite_info)
-        yield AnswerEvent(type="stage", stage="rewriting", detail={"queries": queries})
-        knowledge_base_count = len(cfg["kb_ids"]) if cfg["kb_ids"] else None
-        yield AnswerEvent(type="stage", stage="retrieving", detail={"knowledge_base_count": knowledge_base_count})
-        search_request = self._search_request(request, cfg, query=retrieval_query)
-        outcome = self.search_service.search_with_diagnostics(search_request, extra_queries=queries[1:])
-        results = outcome.items
-        sources = self._sources(results)
-        cfg["content_allows_external"] = not bool(self._restricted_document_ids([item.document_id for item in sources]))
-        yield AnswerEvent(type="stage", stage="candidates", detail={
-            "candidate_count": outcome.diagnostics.candidate_count,
-            "source_count": len(sources),
-        })
-        if outcome.diagnostics.rerank_applied:
-            yield AnswerEvent(type="stage", stage="reranking")
-        yield AnswerEvent(type="sources", sources=sources)
-        scope = self._internal_scope(results)
-
-        stage_timings = outcome.diagnostics.timings_ms
-        stage_timings["query_rewrite"] = rewrite_ms
-        local_stats: dict = {"first_token_ms": None, "generation_ms": None, "prompt_tokens": None, "completion_tokens": None}
-        deepseek_stats: dict = {"first_token_ms": None, "generation_ms": None, "prompt_tokens": None, "completion_tokens": None}
-
-        local_answer = ""
-        # 无内部证据时禁止千问凭训练知识冒充公司资料回答。
-        if sources:
-            yield AnswerEvent(type="stage", stage="local_generating")
-            try:
-                generation_started = perf_counter()
-                first_token: float | None = None
-                prompt_tokens: int | None = None
-                completion_tokens: int = 0
-                async for item in self.ollama.stream_with_stats(
-                    self._local_messages(request, sources, scope, cfg["system_prompt"], question_type),
-                    model=cfg["model_name"],
-                    temperature=cfg["temperature"],
-                ):
-                    if item.get("prompt_eval_count") is not None:
-                        prompt_tokens = int(item["prompt_eval_count"])
-                    if item.get("eval_count") is not None:
-                        completion_tokens = int(item["eval_count"])
-                    delta = item.get("delta") or ""
-                    if not delta:
-                        continue
-                    if first_token is None:
-                        first_token = perf_counter() - generation_started
-                    local_answer += delta
-                    yield AnswerEvent(type="delta", provider=AnswerProvider.LOCAL, text=delta)
-                local_stats = {
-                    "first_token_ms": _seconds_since(generation_started) if first_token is None else round(first_token * 1000, 2),
-                    "generation_ms": _seconds_since(generation_started),
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                }
-            except LlmError as exc:
-                yield AnswerEvent(type="no_answer", no_answer=no_answer_payload(
-                    MODEL_UNAVAILABLE, allow_deepseek=cfg["deepseek_enabled"],
-                    deepseek_configured=self.deepseek.configured,
-                ))
-                yield AnswerEvent(type="error", error={"code": exc.code, "message": exc.message})
-                return
-        else:
-            local_answer = NO_INTERNAL_ANSWER
-            yield AnswerEvent(type="delta", provider=AnswerProvider.LOCAL, text=local_answer)
-
-        provider = AnswerProvider.LOCAL
-        deepseek_used = False
-        deepseek_blocked = cfg["deepseek_enabled"] and not cfg["deepseek_allowed"]
-        content_blocked = bool(sources) and not cfg["content_allows_external"]
-        # API Key 存在并不等于自动上传资料；助手允许、内容允许且用户（或默认配置）开启时才增强。
-        if deepseek_blocked:
-            yield AnswerEvent(
-                type="warning",
-                warning=AnswerWarning(
-                    code="ASSISTANT_DEEPSEEK_BLOCKED",
-                    message="当前助手策略不允许调用外部模型，本次使用本地模型回答。",
-                ),
-            )
-        elif content_blocked:
-            yield AnswerEvent(
-                type="warning",
-                warning=AnswerWarning(
-                    code="EXTERNAL_LLM_BLOCKED",
-                    message="资料策略禁止将检索到的资料发送到外部模型，本次使用本地模型回答。",
-                ),
-            )
-        # STRICT 无答案策略下，没有内部资料时不允许用通用知识“补答”。
-        elif (
-            cfg["deepseek_enabled"] and cfg["content_allows_external"]
-            and (bool(sources) or cfg.get("no_answer_policy") != "STRICT")
-            and (plan is None or plan.deepseek_enabled)
-        ):
-            if not self.deepseek.configured:
-                yield AnswerEvent(
-                    type="warning",
-                    warning=AnswerWarning(
-                        code="DEEPSEEK_NOT_CONFIGURED",
-                        message="尚未配置 DeepSeek API Key，本次使用本地模型回答。",
-                    ),
-                )
-            else:
-                yield AnswerEvent(type="stage", stage="deepseek_enhancing")
-                enhanced_parts: list[str] = []
-                try:
-                    ds_started = perf_counter()
-                    ds_first: float | None = None
-                    async for delta in self.deepseek.stream(self._deepseek_messages(
-                        request, sources, local_answer, cfg["system_prompt"], question_type,
-                    )):
-                        if ds_first is None:
-                            ds_first = perf_counter() - ds_started
-                        enhanced_parts.append(delta)
-                    combined = "".join(enhanced_parts)
-                    deepseek_stats = {
-                        "first_token_ms": None if ds_first is None else round(ds_first * 1000, 2),
-                        "generation_ms": _seconds_since(ds_started),
-                        "prompt_tokens": None,
-                        "completion_tokens": self._estimate_tokens(combined),
-                    }
-                except LlmError as exc:
-                    yield AnswerEvent(type="warning", warning=AnswerWarning(code=exc.code, message=exc.message))
-                else:
-                    enhanced = combined.strip()
-                    if enhanced:
-                        provider = AnswerProvider.DEEPSEEK
-                        deepseek_used = True
-                        scope = scope if sources else KnowledgeScope.GENERAL
-                        yield AnswerEvent(type="replace", provider=provider, text="")
-                        yield AnswerEvent(type="delta", provider=provider, text=enhanced)
-
-        final_text = local_answer
-        if deepseek_used and enhanced:
-            final_text = enhanced
-
-        # P2-2：引用真实性校验 + 答案置信度；资料不足时禁止模型猜测。
-        confidence = compute_confidence(results, sources, final_text)
-        citation_report = None
-        no_answer = None
-        answer_check_ms = 0.0
-        # Chatflow 关闭答案校验节点时跳过引用校验。
-        if sources and (plan is None or plan.answer_check_enabled):
-            yield AnswerEvent(type="stage", stage="checking")
-            check_started = perf_counter()
-            citation_report = verify_answer(final_text, sources, self._unavailable_citations(sources))
-            marked = mark_unsupported(final_text, citation_report)
-            if marked != final_text:
-                final_text = marked
-                yield AnswerEvent(type="replace", provider=provider, text="")
-                yield AnswerEvent(type="delta", provider=provider, text=final_text)
-            answer_check_ms = _seconds_since(check_started)
-            yield AnswerEvent(type="citation_check", citation_check=citation_report.to_payload())
-        if confidence.tier == INSUFFICIENT:
-            reason = LOW_RELEVANCE if sources else self._no_answer_reason(outcome, retrieval_query, search_request)
-            policy = cfg.get("no_answer_policy") or "SUGGEST"
-            no_answer = no_answer_payload(
-                reason,
-                recommended_documents=(
-                    [] if policy == "STRICT"
-                    else self._recommended_documents(retrieval_query, search_request)
-                ),
-                allow_deepseek=cfg["deepseek_enabled"] and policy != "STRICT",
-                deepseek_configured=self.deepseek.configured,
-            )
-            # DeepSeek 通用知识答案本身已明确声明不是公司资料，保留它不做替换。
-            if final_text != no_answer["message"] and not (deepseek_used and not sources):
-                final_text = no_answer["message"]
-                yield AnswerEvent(type="replace", provider=provider, text="")
-                yield AnswerEvent(type="delta", provider=provider, text=final_text)
-            yield AnswerEvent(type="no_answer", no_answer=no_answer)
-        yield AnswerEvent(type="confidence", confidence=confidence.to_payload(), question_type=question_type)
-        suggestions = await self._follow_up_suggestions(request, final_text, sources)
-        if suggestions:
-            yield AnswerEvent(type="suggestions", suggestions=suggestions)
-
-        metrics = {
-            "query_processing_ms": stage_timings.get("query_processing"),
-            "query_rewrite_ms": stage_timings.get("query_rewrite"),
-            "keyword_search_ms": stage_timings.get("keyword"),
-            "vector_search_ms": stage_timings.get("vector"),
-            "rerank_ms": stage_timings.get("rerank"),
-            "retrieval_ms": stage_timings.get("total"),
-            "llm_first_token_ms": (deepseek_stats if deepseek_used else local_stats).get("first_token_ms"),
-            "llm_generation_ms": (deepseek_stats if deepseek_used else local_stats).get("generation_ms"),
-            "prompt_tokens": (deepseek_stats if deepseek_used else local_stats).get("prompt_tokens"),
-            "completion_tokens": (deepseek_stats if deepseek_used else local_stats).get("completion_tokens"),
-            "total_ms": _seconds_since(started),
-            "source_count": len(sources),
-            "provider": provider.value,
-            "cache_hit": False,
-            # 记录实际用于检索的问题，便于追溯与在检索实验室展示。
-            "retrieval_query": retrieval_query,
-            "retrieval_queries": queries,
-            "query_rewrite": rewrite_info.model_dump() if rewrite_info is not None else None,
-            "question_type": question_type,
-            "question_type_label": QUESTION_TYPES.get(question_type, QUESTION_TYPES[GENERAL])["label"],
-            "confidence": confidence.to_payload(),
-            "citation_check": citation_report.to_payload() if citation_report is not None else None,
-            "no_answer": no_answer,
-            "suggestions": suggestions,
-            # P2-4：按节点记录耗时，供检索实验室/调试面板展示。
-            "node_timings": {
-                "classify": 0.0,
-                "rewrite": stage_timings.get("query_rewrite") or 0.0,
-                "retrieval": stage_timings.get("total") or 0.0,
-                "rerank": stage_timings.get("rerank") or 0.0,
-                "local_model": local_stats.get("generation_ms") or 0.0,
-                "deepseek": deepseek_stats.get("generation_ms") or 0.0,
-                "answer_check": answer_check_ms,
-                "final_answer": _seconds_since(started),
-            },
-            "chatflow_id": (cfg.get("assistant").chatflow_id if cfg.get("assistant") else None),
-        }
-        quality = {
-            "question_type": question_type,
-            "confidence": confidence.to_payload(),
-            "citation_check": citation_report.to_payload() if citation_report is not None else None,
-            "no_answer": no_answer,
-        }
-        if cache_key is not None:
-            self._store_cache(cache_key, final_text, provider, scope, sources, metrics, quality)
-
-        yield AnswerEvent(type="metrics", metrics=metrics)
-        yield AnswerEvent(
-            type="done", provider=provider, scope=scope,
-            deepseek_requested=cfg["deepseek_enabled"], deepseek_used=deepseek_used,
-            source_count=len(sources), question_type=question_type,
-        )
+        async for event in run_production_flow(self, request, cfg, cache_key=cache_key):
+            yield event
 
     @staticmethod
     def _estimate_tokens(text: str) -> int:
@@ -359,12 +112,25 @@ class RagService:
             row = self.search_service.session.get(Assistant, request.assistant_id)
             if row is not None and row.enabled:
                 assistant = row
-        kb_ids = None
-        if assistant is not None and assistant.knowledge_bases:
-            kb_ids = [kb.id for kb in assistant.knowledge_bases]
+        # 知识库范围语义：ALL=全部启用知识库，SELECTED=指定知识库，NONE=尚未配置（不可检索）。
+        kb_ids: list | None = None
+        kb_scope = "ALL"
+        if assistant is not None:
+            bound = [kb.id for kb in assistant.knowledge_bases]
+            if assistant.allow_all_knowledge_bases:
+                kb_ids = list(self.search_service.session.scalars(
+                    select(KnowledgeBase.id).where(KnowledgeBase.enabled.is_(True))
+                ))
+                # 没有任何启用知识库时等同“未配置”，避免无过滤地检索到停用知识库。
+                kb_scope = "ALL" if kb_ids else "NONE"
+            elif bound:
+                kb_scope, kb_ids = "SELECTED", bound
+            else:
+                kb_scope, kb_ids = "NONE", []
         return {
             "assistant": assistant,
             "kb_ids": kb_ids,
+            "kb_scope": kb_scope,
             "search_limit": (
                 assistant.retrieval_limit if assistant is not None
                 else (self.source_limit or self.settings.rag_source_limit)
@@ -379,6 +145,8 @@ class RagService:
             "answer_template": assistant.answer_template if assistant is not None else "AUTO",
             "no_answer_policy": assistant.no_answer_policy if assistant is not None else "SUGGEST",
             "internet_enabled": assistant.internet_enabled if assistant is not None else False,
+            # 联网服务尚未接入：明确返回状态，绝不假装已联网。
+            "internet_configured": bool(getattr(self.settings, "internet_search_enabled", False)),
             # P2-4：助手绑定的已发布 Chatflow（未绑定/未发布时为 None，使用内置默认流程）。
             "chatflow": self._assistant_chatflow(assistant),
             "content_allows_external": True,
@@ -435,9 +203,25 @@ class RagService:
             str(self.settings.rag_max_context_chars),
             cfg["model_name"] or self.settings.ollama_model,
             "-".join(sorted(str(item) for item in (cfg["kb_ids"] or []))),
+            str(cfg.get("kb_scope") or ""),
+            self._filter_fingerprint(request),
             self._version_fingerprint(request, cfg),
         ]
         return uuid.uuid5(uuid.NAMESPACE_URL, "|".join(parts)).hex
+
+    @staticmethod
+    def _filter_fingerprint(request: AnswerRequest) -> str:
+        """结构化过滤条件指纹；不同过滤组合不能复用同一缓存答案。"""
+        return "|".join([
+            str(request.document_name or ""),
+            ",".join(sorted(tag.strip() for tag in request.tags if tag.strip())),
+            str(request.department_id or ""),
+            str(request.owner_user_id or ""),
+            getattr(request.document_status, "value", request.document_status) or "",
+            str(request.relative_path or ""),
+            str(request.version_number or ""),
+            str(int(request.valid_only)),
+        ])
 
     def _version_fingerprint(self, request: AnswerRequest, cfg: dict) -> str:
         """资料内容/状态指纹：停用、删除、编辑、重建索引都会改变指纹并让缓存失效。"""
@@ -502,6 +286,10 @@ class RagService:
             document_name=request.document_name, created_from=request.created_from,
             created_to=request.created_to, knowledge_base_id=request.knowledge_base_id,
             knowledge_base_ids=cfg["kb_ids"] or [],
+            tags=request.tags, department_id=request.department_id,
+            owner_user_id=request.owner_user_id, document_status=request.document_status,
+            relative_path=request.relative_path, version_number=request.version_number,
+            valid_only=request.valid_only,
             limit=cfg["search_limit"],
         )
 
@@ -531,6 +319,8 @@ class RagService:
                 row_start=result.row_start, row_end=result.row_end,
                 section_path=result.section_path, ocr_confidence=result.ocr_confidence,
                 match_type=result.match_type, score=result.final_score,
+                retrieval_rank=result.pre_rerank_rank, pre_rerank_rank=result.pre_rerank_rank,
+                post_rerank_rank=result.post_rerank_rank,
             ))
         return sources
 
@@ -557,6 +347,25 @@ class RagService:
             elif not document.enabled:
                 unavailable[source.citation_number] = "DISABLED"
         return unavailable
+
+    def _stale_citations(self, sources: list[AnswerSource]) -> dict[int, str]:
+        """返回引用编号 -> 版本/位置不一致状态，供前端提示“版本已更新”。"""
+        stale: dict[int, str] = {}
+        for source in sources:
+            document = self.search_service.session.get(Document, source.document_id)
+            if document is not None and source.document_version is not None \
+                    and document.version_number != source.document_version:
+                stale[source.citation_number] = "VERSION_CHANGED"
+                continue
+            chunk = self.search_service.session.get(DocumentChunk, source.chunk_id)
+            if chunk is None:
+                continue
+            if (
+                chunk.page_start != source.page_start or chunk.page_end != source.page_end
+                or chunk.slide_number != source.slide_number or chunk.sheet_name != source.sheet_name
+            ):
+                stale[source.citation_number] = "LOCATION_CHANGED"
+        return stale
 
     async def _follow_up_suggestions(self, request: AnswerRequest, answer: str, sources: list) -> list[str]:
         """生成 2~4 个推荐追问；默认启发式，开启后可用本地模型生成。"""

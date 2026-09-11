@@ -26,7 +26,7 @@ class RetrievalInspectResponse(BaseModel):
 # ---------------------------------------------------------------- 检索词典
 
 class DictionaryEntryCreate(BaseModel):
-    category: str = Field(pattern="^(SYNONYM|ABBREVIATION|PROPER_NOUN)$")
+    category: str = Field(pattern="^(SYNONYM|ABBREVIATION|PROPER_NOUN|CROSS_LANGUAGE)$")
     term: str = Field(min_length=1, max_length=255)
     expansions: list[str] = Field(default_factory=list, max_length=50)
     enabled: bool = True
@@ -96,6 +96,7 @@ class TestCaseCreate(BaseModel):
     question: str = Field(min_length=1, max_length=1000)
     knowledge_base_id: uuid.UUID | None = None
     expected_document_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
+    expected_chunk_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
     must_cite_document_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
     forbidden_document_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
     expected_keywords: list[str] = Field(default_factory=list, max_length=30)
@@ -109,6 +110,7 @@ class TestCaseUpdate(BaseModel):
     question: str | None = Field(default=None, min_length=1, max_length=1000)
     knowledge_base_id: uuid.UUID | None = None
     expected_document_ids: list[uuid.UUID] | None = Field(default=None, max_length=20)
+    expected_chunk_ids: list[uuid.UUID] | None = Field(default=None, max_length=100)
     must_cite_document_ids: list[uuid.UUID] | None = Field(default=None, max_length=20)
     forbidden_document_ids: list[uuid.UUID] | None = Field(default=None, max_length=20)
     expected_keywords: list[str] | None = Field(default=None, max_length=30)
@@ -126,6 +128,7 @@ class TestCaseResponse(BaseModel):
     question: str
     knowledge_base_id: uuid.UUID | None
     expected_document_ids: list[str]
+    expected_chunk_ids: list[str] = Field(default_factory=list)
     must_cite_document_ids: list[str]
     forbidden_document_ids: list[str]
     expected_keywords: list[str]
@@ -211,5 +214,6 @@ class RunCompareResponse(BaseModel):
     left: TestRunResponse
     right: TestRunResponse
     metric_deltas: dict
+    metric_changes: list[dict] = Field(default_factory=list)
     config_differences: list[dict]
     case_changes: list[dict]

@@ -29,6 +29,7 @@ class AssistantOut(BaseModel):
     no_answer_policy: str = "SUGGEST"
     capabilities: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+    allow_all_knowledge_bases: bool = False
     chatflow_id: uuid.UUID | None = None
     enabled: bool
     created_at: datetime
@@ -58,6 +59,7 @@ class AssistantUpsert(BaseModel):
     no_answer_policy: str | None = Field(default=None, pattern="^(STRICT|SUGGEST|GENERAL)$")
     capabilities: list[str] | None = Field(default=None, max_length=20)
     limitations: list[str] | None = Field(default=None, max_length=20)
+    allow_all_knowledge_bases: bool | None = None
     chatflow_id: uuid.UUID | None = None
     enabled: bool | None = None
 
@@ -74,9 +76,11 @@ class AssistantWelcomeResponse(BaseModel):
     recent_questions: list[str] = Field(default_factory=list)
     knowledge_bases: list[dict] = Field(default_factory=list)
     knowledge_scope: str = "全部启用知识库"
+    knowledge_scope_configured: bool = True
     general_knowledge_allowed: bool = False
     operations_allowed: bool = False
     internet_enabled: bool = False
+    internet_configured: bool = False
 
 
 class AssistantKnowledgeBasesPut(BaseModel):

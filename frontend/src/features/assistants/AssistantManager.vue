@@ -9,6 +9,7 @@ import type { AssistantRecord } from '../../types/assistant'
 import { getHarnessStatus, getNamespaces } from '../../api/harness'
 import { listChatflows } from '../../api/chatflows'
 import type { ChatflowRecord } from '../../types/chatflow'
+import { buildAssistantPayload } from './assistantPayload'
 
 const DEFAULT_PROMPT = '你是公司内部知识助手。只能把提供的内部资料作为公司事实依据，用专业、简洁、有引用的中文回答；没有可靠资料时明确说明，不编造公司结论。'
 
@@ -98,7 +99,7 @@ function applyToForm(item: AssistantRecord) {
   form.limitations = (item.limitations || []).join('\n')
   form.chatflow_id = item.chatflow_id || ''
   selectedKbIds.value = item.knowledge_base_ids ?? []
-  useAllKnowledgeBases.value = !(item.knowledge_base_ids?.length)
+  useAllKnowledgeBases.value = Boolean(item.allow_all_knowledge_bases)
 }
 
 function selectAssistant(id: string) {
@@ -133,7 +134,7 @@ function newForm() {
   form.limitations = ''
   form.chatflow_id = ''
   selectedKbIds.value = []
-  useAllKnowledgeBases.value = true
+  useAllKnowledgeBases.value = false
   editorOpen.value = true
 }
 
@@ -172,30 +173,7 @@ async function save() {
   }
   saving.value = true
   error.value = ''
-  const payload = {
-    name: form.name.trim(),
-    description: form.description.trim() || null,
-    avatar: form.avatar.trim() || '康',
-    model_provider: form.model_provider,
-    model_name: form.model_name.trim() || null,
-    use_deepseek_allowed: form.deepseek_enabled,
-    default_deepseek_enabled: form.deepseek_enabled,
-    deepseek_enabled: form.deepseek_enabled,
-    harness_enabled: form.harness_enabled,
-    harness_context: form.harness_enabled ? form.harness_context || null : null,
-    harness_namespace: form.harness_namespace || 'default',
-    retrieval_limit: Number(form.retrieval_limit) || 6,
-    temperature: Number(form.temperature) ?? 0.2,
-    welcome_message: form.welcome_message.trim() || null,
-    system_prompt: form.system_prompt.trim() || null,
-    recommended_questions: form.recommended_questions.split('\n').map((item) => item.trim()).filter(Boolean),
-    answer_template: form.answer_template,
-    internet_enabled: form.internet_enabled,
-    no_answer_policy: form.no_answer_policy,
-    capabilities: form.capabilities.split('\n').map((item) => item.trim()).filter(Boolean),
-    limitations: form.limitations.split('\n').map((item) => item.trim()).filter(Boolean),
-    chatflow_id: form.chatflow_id || null,
-  }
+  const payload = buildAssistantPayload(form, useAllKnowledgeBases.value)
   try {
     let item: AssistantRecord
     if (selectedId.value) {
@@ -276,7 +254,7 @@ onMounted(refresh)
                 <td class="assistant-description" :title="item.description || ''">{{ item.description || '暂无说明' }}</td>
                 <td>{{ item.model_name || '默认' }}</td>
                 <td>{{ item.knowledge_base_ids.length === 0 ? '全部知识库' : `${item.knowledge_base_ids.length} 个知识库` }}</td>
-                <td>{{ item.deepseek_enabled ? '开启' : '关闭' }}</td>
+                <td>{{ !item.use_deepseek_allowed ? '禁止' : (item.deepseek_enabled ? '开启' : '关闭') }}</td>
                 <td>{{ item.harness_enabled ? '开启' : '关闭' }}</td>
                 <td><span :class="item.enabled ? 'is-active' : 'is-stale'">{{ item.enabled ? '启用' : '停用' }}</span></td>
                 <td class="row-actions">
@@ -311,8 +289,16 @@ onMounted(refresh)
           <fieldset class="capability-settings">
             <legend>模型与工具能力</legend>
             <label class="capability-option">
+              <input v-model="form.use_deepseek_allowed" type="checkbox">
+              <span><strong>允许使用 DeepSeek</strong><small>关闭后该助手永久禁用 DeepSeek，即使下面两个开关打开也不会调用。</small></span>
+            </label>
+            <label class="capability-option">
+              <input v-model="form.default_deepseek_enabled" type="checkbox">
+              <span><strong>默认启用 DeepSeek</strong><small>新建会话时 DeepSeek 的默认状态；与“允许使用”和“实际启用”互不影响。</small></span>
+            </label>
+            <label class="capability-option">
               <input v-model="form.deepseek_enabled" type="checkbox">
-              <span><strong>启用 DeepSeek 增强</strong><small>检索完成后，将允许外发的资料片段交给 DeepSeek 优化答案。</small></span>
+              <span><strong>实际启用 DeepSeek 增强</strong><small>检索完成后，将允许外发的资料片段交给 DeepSeek 优化答案。</small></span>
             </label>
             <label class="capability-option">
               <input v-model="form.harness_enabled" type="checkbox">
@@ -380,10 +366,10 @@ onMounted(refresh)
           </div>
 
           <div>
-            <p class="assistant-hint" style="margin:0 0 6px">知识库范围（空 = 全部启用的知识库）</p>
+            <p class="assistant-hint" style="margin:0 0 6px">知识库范围：专项助手必须显式绑定知识库，未绑定将无法检索。</p>
             <label class="form-row" style="display:flex;align-items:center;gap:8px;flex-direction:row">
               <input type="checkbox" :checked="useAllKnowledgeBases" @change="onAllKbToggle">
-              <span>全部启用知识库（不限）</span>
+              <span>允许访问全部启用知识库（综合助手）</span>
             </label>
             <div v-if="!useAllKnowledgeBases" class="assistant-checkboxes">
               <label v-for="kb in knowledgeBases" :key="kb.id">
@@ -391,6 +377,9 @@ onMounted(refresh)
                 {{ kb.name }}{{ kb.enabled ? '' : '（停用）' }}
               </label>
             </div>
+            <p v-if="!useAllKnowledgeBases && selectedKbIds.length === 0" class="answer-notice is-warning">
+              尚未配置资料范围：该助手不会检索任何知识库，保存后用户端将显示“尚未配置资料范围”。
+            </p>
           </div>
 
           <div class="form-actions">

@@ -54,6 +54,10 @@ class Document(Base):
     previous_version_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # P2-6：替代版本。新版本创建时回填旧版本的 superseded_by_id，便于判断“已被替代”。
+    superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     deleted_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

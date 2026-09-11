@@ -35,13 +35,19 @@ def _source_payload(source: ChatMessageSource, service: ChatService) -> dict:
 
 
 def _message_payload(message: ChatMessage, service: ChatService) -> ChatMessageOut:
+    metrics = dict(message.metrics or {})
+    user = getattr(service, "user", None)
+    # P2-4：逐节点执行记录只对管理员可见，普通用户只保留简化状态。
+    if user is None or not getattr(user, "is_super_admin", False):
+        metrics.pop("flow_steps", None)
+        metrics.pop("node_timings", None)
     return ChatMessageOut(
         id=message.id, session_id=message.session_id, role=message.role,
         content=message.content, provider=message.provider,
         knowledge_scope=message.knowledge_scope, status=message.status,
         error_code=message.error_code, error_message=message.error_message,
         created_at=message.created_at, completed_at=message.completed_at,
-        metrics=message.metrics or {},
+        metrics=metrics,
         sources=[_source_payload(source, service) for source in message.sources],
     )
 

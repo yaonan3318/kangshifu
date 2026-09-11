@@ -15,6 +15,7 @@ class DictionaryCategory(str, enum.Enum):
     SYNONYM = "SYNONYM"            # 同义词 / 近义词
     ABBREVIATION = "ABBREVIATION"  # 公司内部缩写、简称与全称
     PROPER_NOUN = "PROPER_NOUN"    # 专有名词、产品名
+    CROSS_LANGUAGE = "CROSS_LANGUAGE"  # 中英文映射，如 气泡 -> bubble
 
 
 class RetrievalDictionaryEntry(Base):

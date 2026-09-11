@@ -19,6 +19,7 @@ const error = ref('')
 const notice = ref('')
 const busy = ref(false)
 const debugQuestion = ref('')
+const includeGeneration = ref(false)
 const debugResult = ref<ChatflowDebugResult | null>(null)
 
 const selected = computed(() => flows.value.find((item) => item.id === selectedId.value) ?? null)
@@ -148,7 +149,9 @@ async function runDebug() {
   busy.value = true
   error.value = ''
   try {
-    debugResult.value = await debugChatflow(selectedId.value, { question: debugQuestion.value.trim() })
+    debugResult.value = await debugChatflow(selectedId.value, {
+      question: debugQuestion.value.trim(), include_generation: includeGeneration.value,
+    })
   } catch (reason) {
     error.value = reason instanceof ApiError ? reason.message : '调试失败'
   } finally {
@@ -157,7 +160,7 @@ async function runDebug() {
 }
 
 function statusLabel(status: string): string {
-  return { succeeded: '成功', skipped: '跳过', failed: '失败' }[status] ?? status
+  return { succeeded: '成功', skipped: '跳过', failed: '失败', timeout: '超时' }[status] ?? status
 }
 
 onMounted(load)
@@ -241,6 +244,7 @@ onMounted(load)
           <div class="section-heading"><div><p class="eyebrow">DEBUG</p><h2>调试运行</h2></div></div>
           <div class="lab-query">
             <label>测试问题<textarea v-model="debugQuestion" placeholder="输入一个问题，观察每个节点耗时与输出"></textarea></label>
+            <label class="admin-check-row"><input v-model="includeGeneration" type="checkbox"><span>同时执行生成节点（本地模型 / DeepSeek / 引用校验）</span></label>
             <button :disabled="busy || !debugQuestion.trim()" @click="runDebug">{{ busy ? '运行中…' : '运行调试' }}</button>
           </div>
           <div v-if="debugResult" class="admin-table-wrap">

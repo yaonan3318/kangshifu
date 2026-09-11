@@ -136,8 +136,12 @@ class ChatService:
             "document_name": source.document_name,
             "location_snapshot": source.location_snapshot,
             "score": source.score,
+            "retrieval_rank": source.retrieval_rank,
+            "pre_rerank_rank": source.pre_rerank_rank,
+            "post_rerank_rank": source.post_rerank_rank,
             "extension": document.extension if document is not None else None,
             "version_number": document.version_number if document is not None else None,
+            "cited_version": source.document_version,
             "matched_keywords": matched_keywords,
         }
         if self.user is None or document is None:
@@ -146,6 +150,9 @@ class ChatService:
         if not resolver.can_read(document):
             return {**base, "content_snapshot": None, "available": False, "can_download": False, "status": "FORBIDDEN", "message": "当前无权查看该引用"}
         available, status = self._availability(document, chunk, kb)
+        # P2-2：文档已更新到新版本时，历史引用标记为“版本已更新”，但快照仍可查看。
+        if available and source.document_version is not None and document.version_number != source.document_version:
+            status = "VERSION_CHANGED"
         return {
             **base,
             "content_snapshot": source.content_snapshot,
@@ -187,7 +194,7 @@ class ChatService:
     def _availability(document, chunk, kb) -> tuple[bool, str]:
         if document is None or chunk is None:
             return False, "DELETED"
-        superseded = bool(document.previous_version_id) or (
+        superseded = bool(document.superseded_by_id) or (
             kb is not None and not kb.enabled
         )
         active = (
@@ -241,6 +248,18 @@ class AnswerRecorder:
         self.session.refresh(self.assistant)
         return self.session_row
 
+    def resume(self, message_id: uuid.UUID | None) -> ChatSession | None:
+        """后台任务复用已创建的助手消息，而不是重新准备会话。"""
+        if message_id is None:
+            return None
+        assistant = self.session.get(ChatMessage, message_id)
+        if assistant is None or assistant.role != ChatMessageRole.ASSISTANT:
+            raise KeyError("回答消息不存在")
+        service = ChatService(self.session, user=self.user)
+        self.session_row = service.get(assistant.session_id, include_archived=True)
+        self.assistant = assistant
+        return self.session_row
+
     def begin_regenerate(self, message_id: uuid.UUID) -> ChatSession:
         """清空既有助手回答并重新进入生成状态，避免重复记录同一问题。"""
         assistant = self.session.get(ChatMessage, message_id)
@@ -288,6 +307,10 @@ class AnswerRecorder:
                     content_snapshot=source.content,
                     location_snapshot=RagLocation.location(source),
                     score=source.score,
+                    retrieval_rank=source.retrieval_rank,
+                    pre_rerank_rank=source.pre_rerank_rank,
+                    post_rerank_rank=source.post_rerank_rank,
+                    document_version=source.document_version,
                 ))
         self.session.commit()
         if self.assistant is not None:

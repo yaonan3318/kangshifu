@@ -6,7 +6,7 @@ import hashlib
 from time import perf_counter
 import uuid
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
@@ -123,7 +123,9 @@ class SearchService:
             if not item.normalized:
                 continue
             mark = perf_counter()
-            keyword = self._keyword_candidates(item.normalized, request)
+            # 关键词召回也使用词典扩展后的文本，使管理员维护的同义词/缩写/中英文映射
+            # 同时影响关键词与向量两路召回，而不是只影响向量。
+            keyword = self._keyword_candidates(item.retrieval_text, request)
             keyword_ms += self._milliseconds(mark)
             mark = perf_counter()
             vector = self._vector_candidates(item.retrieval_text, request)
@@ -146,6 +148,8 @@ class SearchService:
         ranked, warning, mode = self._rerank(processed.normalized, candidates)
         timings["rerank"] = self._milliseconds(mark)
         ranked = self._apply_feedback(ranked)
+        # P2-6：父子切片命中子片段时返回父片段内容，提供更完整的上下文。
+        ranked = self._expand_parents(ranked)
         accepted = self._accept(ranked, request.limit)
         if request.include_stages:
             stages["rerank"] = [self._stage_item(item, item.rerank_score if item.rerank_score is not None else item.final_score) for item in ranked]
@@ -215,8 +219,12 @@ class SearchService:
         if request.created_to:
             clauses.append(Document.created_at < datetime.combine(request.created_to, time.min, UTC) + timedelta(days=1))
         if request.department_id:
-            clauses.append(Document.owner_user_id.in_(
-                select(User.id).where(User.department_id == request.department_id)
+            # 文档自身归属部门优先；同时兼容仅有上传人归属部门的历史数据。
+            clauses.append(or_(
+                Document.department_id == request.department_id,
+                Document.owner_user_id.in_(
+                    select(User.id).where(User.department_id == request.department_id)
+                ),
             ))
         if request.owner_user_id:
             clauses.append(Document.owner_user_id == request.owner_user_id)
@@ -321,6 +329,47 @@ class SearchService:
             item.feedback_boost = boost
             item.adjusted_score = max(0.0, min(1.0, item.final_score + boost))
         return sorted(candidates, key=lambda item: (-item.adjusted_score, str(item.chunk.id)))
+
+    def _expand_parents(self, candidates: list[Candidate]) -> list[Candidate]:
+        """把命中子片段的候选替换为其父片段，父片段内容作为返回上下文。"""
+        if not candidates:
+            return candidates
+        child_items = [
+            item for item in candidates
+            if getattr(item.chunk, "chunk_role", "normal") == "child"
+            and item.chunk.parent_chunk_id is not None
+        ]
+        if not child_items:
+            return candidates
+        parent_ids = {item.chunk.parent_chunk_id for item in child_items}
+        parent_map = {
+            parent_id: self.session.get(DocumentChunk, parent_id)
+            for parent_id in parent_ids
+        }
+        expanded: list[Candidate] = []
+        seen_parents: set[uuid.UUID] = set()
+        for item in candidates:
+            chunk = item.chunk
+            if getattr(chunk, "chunk_role", "normal") == "child" and chunk.parent_chunk_id is not None:
+                parent = parent_map.get(chunk.parent_chunk_id)
+                if parent is not None:
+                    if parent.id in seen_parents:
+                        continue
+                    seen_parents.add(parent.id)
+                    item = self._with_chunk(item, parent)
+            expanded.append(item)
+        return expanded
+
+    @staticmethod
+    def _with_chunk(item: Candidate, chunk: DocumentChunk) -> Candidate:
+        return Candidate(
+            chunk=chunk, document=item.document, keyword_score=item.keyword_score,
+            vector_score=item.vector_score, fusion_score=item.fusion_score,
+            rerank_score=item.rerank_score, final_score=item.final_score,
+            adjusted_score=item.adjusted_score, feedback_boost=item.feedback_boost,
+            pre_rerank_rank=item.pre_rerank_rank, post_rerank_rank=item.post_rerank_rank,
+            sources=item.sources,
+        )
 
     def _accept(self, candidates: list[Candidate], limit: int) -> list[Candidate]:
         accepted: list[Candidate] = []

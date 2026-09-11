@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.config import get_settings
 from app.db import get_session
 from app.errors import AppError
 from app.models import (
@@ -48,6 +49,7 @@ def _assistant_payload(assistant: Assistant) -> AssistantOut:
         answer_template=assistant.answer_template, internet_enabled=assistant.internet_enabled,
         no_answer_policy=assistant.no_answer_policy,
         capabilities=list(assistant.capabilities or []), limitations=list(assistant.limitations or []),
+        allow_all_knowledge_bases=assistant.allow_all_knowledge_bases,
         chatflow_id=assistant.chatflow_id,
         enabled=assistant.enabled, created_at=assistant.created_at, updated_at=assistant.updated_at,
         knowledge_base_ids=[kb.id for kb in assistant.knowledge_bases],
@@ -140,6 +142,7 @@ def create_assistant(
             no_answer_policy=body.no_answer_policy or "SUGGEST",
             capabilities=[str(item).strip() for item in (body.capabilities or []) if str(item).strip()],
             limitations=[str(item).strip() for item in (body.limitations or []) if str(item).strip()],
+            allow_all_knowledge_bases=bool(body.allow_all_knowledge_bases),
             enabled=True if body.enabled is None else body.enabled,
         )
         session.add(assistant)
@@ -167,15 +170,22 @@ def assistant_welcome(
     """助手欢迎页：能做什么/不能做什么、知识库范围、是否允许通用知识与运维、最近热门问题。"""
     user = require_user(current_user(request))
     assistant = _load(session, assistant_id)
-    if assistant.knowledge_bases:
-        bases = [{"id": str(kb.id), "name": kb.name} for kb in assistant.knowledge_bases]
-        scope = "、".join(kb.name for kb in assistant.knowledge_bases)
-    else:
+    if assistant.allow_all_knowledge_bases:
         enabled = list(session.scalars(
             select(KnowledgeBase).where(KnowledgeBase.enabled.is_(True)).order_by(KnowledgeBase.name)
         ))
         bases = [{"id": str(kb.id), "name": kb.name} for kb in enabled]
         scope = "全部启用知识库"
+        scope_configured = True
+    elif assistant.knowledge_bases:
+        bases = [{"id": str(kb.id), "name": kb.name} for kb in assistant.knowledge_bases]
+        scope = "、".join(kb.name for kb in assistant.knowledge_bases)
+        scope_configured = True
+    else:
+        # 专项助手未绑定知识库时不能默认放大到全部知识库。
+        bases = []
+        scope = "尚未配置资料范围"
+        scope_configured = False
     recent = session.execute(
         select(ChatMessage.content)
         .join(ChatSession, ChatSession.id == ChatMessage.session_id)
@@ -192,9 +202,11 @@ def assistant_welcome(
         recommended_questions=list(assistant.recommended_questions or []),
         recent_questions=[row[0] for row in recent if row[0]],
         knowledge_bases=bases, knowledge_scope=scope,
+        knowledge_scope_configured=scope_configured,
         general_knowledge_allowed=bool(assistant.use_deepseek_allowed and assistant.deepseek_enabled),
         operations_allowed=bool(assistant.harness_enabled and user.is_super_admin),
         internet_enabled=assistant.internet_enabled,
+        internet_configured=bool(get_settings().internet_search_enabled),
     )
 
 

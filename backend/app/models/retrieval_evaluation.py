@@ -54,6 +54,8 @@ class RetrievalTestCase(Base):
     )
     # 正确文档（召回率）与必须引用文档（引用正确率）分开记录，语义不同。
     expected_document_ids: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    # 期望片段：用于计算真正的片段召回率（命中的期望 chunk_id / 期望 chunk_id 总数）。
+    expected_chunk_ids: Mapped[list[str]] = mapped_column(JSONB, default=list)
     must_cite_document_ids: Mapped[list[str]] = mapped_column(JSONB, default=list)
     forbidden_document_ids: Mapped[list[str]] = mapped_column(JSONB, default=list)
     expected_keywords: Mapped[list[str]] = mapped_column(JSONB, default=list)

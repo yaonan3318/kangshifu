@@ -5,8 +5,9 @@ const props = defineProps<{ source: CitationSource | null; knowledgeBaseName?: s
 const emit = defineEmits<{ close: []; openDocument: [documentId: string] }>()
 
 function statusText(): string {
-  if (props.source?.status === 'DELETED') return '当前资料已删除'
-  if (props.source?.status === 'DISABLED') return '当前资料已停用'
+  if (props.source?.status === 'DELETED') return '资料已失效（原资料已删除）'
+  if (props.source?.status === 'DISABLED') return '资料已失效（原资料已停用）'
+  if (props.source?.status === 'VERSION_CHANGED') return '版本已更新，以下为回答时的历史快照'
   if (props.source?.status === 'FORBIDDEN') return props.source?.message || '当前无权查看该引用'
   return ''
 }
@@ -26,11 +27,14 @@ function statusText(): string {
 
       <div class="reference-status">
         <span v-if="source.status === 'ACTIVE'" class="is-active">资料当前可检索</span>
-        <span v-else class="is-stale">{{ statusText() }}，以下为回答时的历史快照</span>
+        <span v-else class="is-stale">{{ statusText() }}</span>
+        <span v-if="source.cited_version != null">引用版本 v{{ source.cited_version }}</span>
         <span v-if="source.score != null">相关度 {{ (source.score * 100).toFixed(1) }}%</span>
         <span>{{ source.location_text }}</span>
         <span v-if="source.version_number != null">文档版本 v{{ source.version_number }}</span>
         <span v-if="source.extension">{{ source.extension.toUpperCase() }}</span>
+        <span v-if="source.pre_rerank_rank != null">召回排名 {{ source.pre_rerank_rank }}</span>
+        <span v-if="source.post_rerank_rank != null">精排排名 {{ source.post_rerank_rank }}</span>
       </div>
 
       <div v-if="source.matched_keywords && source.matched_keywords.length" class="reference-keywords">

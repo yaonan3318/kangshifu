@@ -56,6 +56,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             with SessionLocal() as session:
                 bootstrap(session, active_settings.admin_username, active_settings.admin_password)
+                # P2-5：服务重启后未完成的生成任务无法继续，标记为失败以便用户重新生成。
+                from app.services.answer_jobs import AnswerJobService
+                recovered = AnswerJobService(session).recover_stale()
+                if recovered:
+                    logger.info("Recovered %s interrupted answer jobs", recovered)
         except Exception:
             logger.exception("Admin bootstrap failed (migrations may not be applied yet)")
 
@@ -81,7 +86,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_origins=[origin.strip() for origin in active_settings.cors_origins.split(",") if origin.strip()],
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "Authorization"],
+        allow_headers=["Content-Type", "Authorization", "Last-Event-ID"],
     )
 
     @app.middleware("http")

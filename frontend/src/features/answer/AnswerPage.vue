@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ApiError } from '../../api/documents'
-import { getAnswerStatus, streamAnswer, warmUpAnswer } from '../../api/answer'
+import { cancelAnswerJob, getActiveAnswerJob, getAnswerStatus, resumeAnswerJob, streamAnswer, warmUpAnswer } from '../../api/answer'
 import type { AnswerEvent, AnswerMetrics, AnswerSource, AnswerStatus, AnswerTurn, CitationSource } from '../../types/answer'
 import { listKnowledgeBases } from '../../api/knowledgeBases'
 import type { KnowledgeBaseRecord } from '../../types/knowledgeBases'
@@ -180,7 +180,7 @@ function ensureTurns(sessionId: string): AnswerTurn[] {
   return sessionCache[sessionId]
 }
 
-function dbSourceToUi(source: { citation_number: number; document_id: string; chunk_id: string; document_name: string; content_snapshot: string | null; location_snapshot: Record<string, unknown>; score?: number | null; available: boolean; status: string; message?: string | null; version_number?: number | null; matched_keywords?: string[]; can_download?: boolean; extension?: string | null }): CitationSource {
+function dbSourceToUi(source: { citation_number: number; document_id: string; chunk_id: string; document_name: string; content_snapshot: string | null; location_snapshot: Record<string, unknown>; score?: number | null; available: boolean; status: string; message?: string | null; version_number?: number | null; cited_version?: number | null; matched_keywords?: string[]; can_download?: boolean; extension?: string | null; retrieval_rank?: number | null; pre_rerank_rank?: number | null; post_rerank_rank?: number | null }): CitationSource {
   const location = source.location_snapshot
   const locationText = (typeof location.text === 'string' && location.text) || '片段内容'
   return {
@@ -196,6 +196,10 @@ function dbSourceToUi(source: { citation_number: number; document_id: string; ch
     extension: source.extension ?? null,
     version_number: source.version_number ?? null,
     matched_keywords: source.matched_keywords ?? [],
+    retrieval_rank: source.retrieval_rank ?? null,
+    pre_rerank_rank: source.pre_rerank_rank ?? null,
+    post_rerank_rank: source.post_rerank_rank ?? null,
+    cited_version: source.cited_version ?? null,
     status: (source.status as CitationSource['status']) || 'ACTIVE',
     message: source.message ?? null,
     meta: source.location_snapshot,
@@ -222,6 +226,10 @@ function sseSourceToUi(source: AnswerSource): CitationSource {
     can_download: true,
     extension: source.extension,
     version_number: source.document_version ?? null,
+    cited_version: source.document_version ?? null,
+    retrieval_rank: source.retrieval_rank ?? null,
+    pre_rerank_rank: source.pre_rerank_rank ?? null,
+    post_rerank_rank: source.post_rerank_rank ?? null,
     status: 'ACTIVE',
     meta: {
       page_start: source.page_start, page_end: source.page_end, slide_number: source.slide_number,
@@ -290,10 +298,13 @@ function turnFromHistory(messages: ChatMessageRecord[]): AnswerTurn[] {
         turn.errorMessage = message.error_message || undefined
       } else if (message.status === 'STOPPED') {
         turn.stopped = true
-      } else if (message.status === 'GENERATING' && !hasContent) {
-        // 刷新时仍在生成中的记录已不可恢复，按停止处理。
-        turn.stopped = true
-        pending = turn
+      } else if (message.status === 'GENERATING') {
+        // P2-5：生成中的消息保留，页面加载后通过活动任务恢复；有部分内容先展示。
+        turn.generating = true
+        turn.stage = turn.stage || 'generating'
+        if (hasContent) turn.answer = message.content
+        turns.push(turn)
+        pending = null
         continue
       }
       turns.push(turn)
@@ -332,6 +343,7 @@ async function loadSession(sessionId: string, refreshMeta = true) {
     if (refreshMeta) await refreshSessions()
     await nextTick()
     scrollToBottom(false)
+    void resumeActiveJob(sessionId)
   } catch (reason) {
     sessionError.value = reason instanceof ApiError ? reason.message : '无法恢复会话'
   } finally {
@@ -450,6 +462,8 @@ async function ask(suggested?: string) {
     stage: 'understanding',
     failed: false,
     stopped: false,
+    jobId: null,
+    cursor: 0,
     harnessTaskId: null,
     harnessSteps: [],
     approval: null,
@@ -473,15 +487,24 @@ async function ask(suggested?: string) {
       k8sContext: currentAssistant.value?.harness_context ?? undefined,
       k8sNamespace: currentAssistant.value?.harness_namespace ?? undefined,
       history,
+      requestId: newRequestId(),
     }, controller.signal, (event) => {
       handleAnswerEvent(turn, event)
       void scrollToBottom(false)
+    }, (started) => {
+      if (started.sessionId) {
+        activeSessionId.value = started.sessionId
+        storeActiveSession(started.sessionId)
+      }
+      if (started.messageId) turn.assistantMessageId = started.messageId
+      if (started.jobId) turn.jobId = started.jobId
     })
     if (outcome.sessionId) {
       activeSessionId.value = outcome.sessionId
       storeActiveSession(outcome.sessionId)
     }
     if (outcome.messageId) turn.assistantMessageId = outcome.messageId
+    if (outcome.jobId) turn.jobId = outcome.jobId
     finalizeTurn(turn, false)
   } catch (reason) {
     if (!controller.signal.aborted) {
@@ -504,6 +527,62 @@ function finalizeTurn(turn: AnswerTurn, failed: boolean) {
     if (failed) turn.failed = true
     if (!turn.answer && !failed) turn.stopped = true
     void refreshSessions()
+  }
+}
+
+function newRequestId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
+  return `req-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+async function resumeActiveJob(sessionId: string) {
+  if (activeController.value) return
+  let job
+  try {
+    job = await getActiveAnswerJob(sessionId)
+  } catch {
+    return
+  }
+  if (!job) {
+    // 没有活动任务：把历史里遗留的“生成中”标记为失败，避免界面一直转圈。
+    const stale = ensureTurns(sessionId).find((item) => item.generating)
+    if (stale) {
+      stale.generating = false
+      stale.failed = true
+      stale.errorMessage = '生成任务已中断，请重新生成'
+      void refreshSessions()
+    }
+    return
+  }
+  const turns = ensureTurns(sessionId)
+  let turn = turns.find((item) => item.assistantMessageId === job.message_id)
+  if (!turn) {
+    turn = turns[turns.length - 1]
+  }
+  if (!turn) return
+  turn.generating = true
+  turn.stopped = false
+  turn.failed = false
+  turn.stage = job.current_stage || 'understanding'
+  turn.jobId = job.id
+  turn.answer = job.partial_content || turn.answer
+  turn.cursor = job.event_cursor || 0
+  const controller = new AbortController()
+  activeController.value = controller
+  try {
+    await resumeAnswerJob(job.id, turn.cursor || 0, controller.signal, (event) => {
+      handleAnswerEvent(turn!, event)
+      void scrollToBottom(false)
+    })
+    finalizeTurn(turn, false)
+    await loadSession(sessionId, false)
+  } catch (reason) {
+    if (!controller.signal.aborted) {
+      turn.warnings.push({ code: 'CONNECTION_FAILED', message: reason instanceof Error ? reason.message : '生成连接中断' })
+      finalizeTurn(turn, true)
+    }
+  } finally {
+    activeController.value = null
   }
 }
 
@@ -540,11 +619,20 @@ async function regenerate(turn: AnswerTurn) {
       k8sContext: currentAssistant.value?.harness_context ?? undefined,
       k8sNamespace: currentAssistant.value?.harness_namespace ?? undefined,
       history,
+      requestId: newRequestId(),
     }, controller.signal, (event) => {
       handleAnswerEvent(turn, event)
       void scrollToBottom(false)
+    }, (started) => {
+      if (started.sessionId) {
+        activeSessionId.value = started.sessionId
+        storeActiveSession(started.sessionId)
+      }
+      if (started.messageId) turn.assistantMessageId = started.messageId
+      if (started.jobId) turn.jobId = started.jobId
     })
     if (outcome.messageId) turn.assistantMessageId = outcome.messageId
+    if (outcome.jobId) turn.jobId = outcome.jobId
     finalizeTurn(turn, false)
   } catch (reason) {
     if (!controller.signal.aborted) {
@@ -582,8 +670,12 @@ function handleAnswerEvent(turn: AnswerTurn, event: AnswerEvent) {
   }
   if (event.type === 'citation_check' && event.citation_check) turn.citationCheck = event.citation_check
   if (event.type === 'no_answer' && event.no_answer) turn.noAnswer = event.no_answer
-  if (event.type === 'replace') { turn.answer = ''; turn.provider = event.provider ?? 'DEEPSEEK' }
-  if (event.type === 'delta') { turn.answer += event.text ?? ''; if (event.provider) turn.provider = event.provider }
+  if (event.type === 'replace') { turn.answer = ''; turn.cursor = 0; turn.provider = event.provider ?? 'DEEPSEEK' }
+  if (event.type === 'delta') {
+    turn.answer += event.text ?? ''
+    turn.cursor = (turn.cursor ?? 0) + (event.text?.length ?? 0)
+    if (event.provider) turn.provider = event.provider
+  }
   if (event.type === 'warning' && event.warning) turn.warnings.push(event.warning)
   if (event.type === 'done') {
     turn.scope = event.scope ?? null
@@ -659,7 +751,21 @@ async function decideApproval(turn: AnswerTurn, confirmation: string | null) {
 }
 
 function stop() {
+  // 只断开本地 SSE 连接，不取消服务端生成任务（切换页面/标签不应中断生成）。
   activeController.value?.abort()
+}
+
+async function cancelGeneration() {
+  const turn = activeTurns.value.find((item) => item.generating)
+  const jobId = turn?.jobId
+  activeController.value?.abort()
+  if (jobId) {
+    try {
+      await cancelAnswerJob(jobId)
+    } catch {
+      // 取消失败不阻塞界面；服务端重启恢复会把未完成任务标记为失败。
+    }
+  }
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -974,10 +1080,13 @@ onBeforeUnmount(() => {
             <div class="welcome-cap-block">
               <strong>可访问资料范围</strong>
               <p>{{ assistantWelcome.knowledge_scope }}</p>
+              <p v-if="!assistantWelcome.knowledge_scope_configured" class="answer-notice is-warning">
+                该助手尚未配置资料范围，暂时无法检索知识库。
+              </p>
               <p class="assistant-hint">
                 通用知识：{{ assistantWelcome.general_knowledge_allowed ? '允许' : '不允许' }} ·
                 运维任务：{{ assistantWelcome.operations_allowed ? '允许' : '不允许' }} ·
-                联网：{{ assistantWelcome.internet_enabled ? '允许' : '不允许' }}
+                联网：{{ assistantWelcome.internet_enabled ? (assistantWelcome.internet_configured ? '已配置' : '联网服务未配置') : '不允许' }}
               </p>
             </div>
             <div v-if="assistantWelcome.recent_questions.length" class="welcome-cap-block">
@@ -1145,7 +1254,7 @@ onBeforeUnmount(() => {
             @input="autoResize; saveDraft()"
           ></textarea>
           <div class="composer-actions">
-            <button v-if="activeController" type="button" class="stop-answer" @click="stop">停止生成</button>
+            <button v-if="activeController" type="button" class="stop-answer" @click="cancelGeneration">停止生成</button>
             <button v-else type="submit" class="send-answer" :disabled="!question.trim()">发送</button>
           </div>
         </form>

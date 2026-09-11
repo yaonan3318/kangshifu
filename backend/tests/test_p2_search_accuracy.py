@@ -183,3 +183,46 @@ def test_retrieval_config_has_new_p2_fields():
     assert config.multi_query_count == 4
     assert config.dictionary_enabled is False
     assert config.spelling_correction_enabled is True
+
+
+# ---------------------------------------------------------------- 生产链路接线
+
+def test_dictionary_expansion_reaches_both_keyword_and_vector_recall():
+    """管理员词典扩展必须真正进入生产检索的两路召回，而不是只记录在诊断里。"""
+    from app.schemas.search import SearchRequest
+
+    config = RetrievalConfig(
+        query_rewrite_synonyms="k8s|kubernetes|容器编排", dictionary_enabled=False,
+    )
+    service = SearchService(
+        session=None, settings=SimpleNamespace(search_feedback_ranking_enabled=False), config=config,
+    )
+    captured: dict[str, str] = {}
+    service._keyword_candidates = lambda query, request: captured.__setitem__("keyword", query) or []
+    service._vector_candidates = lambda query, request: captured.__setitem__("vector", query) or []
+    service.search_with_diagnostics(SearchRequest(query="k8s 部署"))
+    assert "kubernetes" in captured["keyword"]
+    assert "kubernetes" in captured["vector"]
+
+
+def test_answer_search_request_forwards_metadata_filters():
+    """生产问答路径必须把结构化过滤条件传给检索服务。"""
+    import uuid as uuid_module
+
+    from app.schemas.answer import AnswerRequest
+    from app.services.rag import RagService
+
+    department_id = uuid_module.uuid4()
+    owner_id = uuid_module.uuid4()
+    request = AnswerRequest(
+        question="问题", tags=["财务", "制度"], department_id=department_id, owner_user_id=owner_id,
+        relative_path="制度/", version_number=3, valid_only=True,
+    )
+    search_request = RagService._search_request(None, request, {"kb_ids": [], "search_limit": 4})
+    assert search_request.tags == ["财务", "制度"]
+    assert search_request.department_id == department_id
+    assert search_request.owner_user_id == owner_id
+    assert search_request.relative_path == "制度/"
+    assert search_request.version_number == 3
+    assert search_request.valid_only is True
+    assert search_request.limit == 4

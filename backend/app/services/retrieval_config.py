@@ -141,17 +141,36 @@ def load_active_config(session, settings: Settings) -> RetrievalConfig:
     return RetrievalConfig.from_dict(version.config, base=base)
 
 
+def _numeric_delta(left_value: Any, right_value: Any) -> float | None:
+    """仅对同类型数值字段给出差值；布尔/文本字段返回 None。"""
+    if isinstance(left_value, bool) or isinstance(right_value, bool):
+        return None
+    if isinstance(left_value, (int, float)) and isinstance(right_value, (int, float)):
+        return round(float(right_value) - float(left_value), 4)
+    return None
+
+
 def config_diff(left: RetrievalConfig, right: RetrievalConfig) -> list[dict[str, Any]]:
-    """返回两个配置版本的字段差异，供前端展示。"""
+    """返回两个配置版本的字段差异，供前端展示旧值/新值/差值/升降。"""
     differences: list[dict[str, Any]] = []
     for field in fields(RetrievalConfig):
         left_value = getattr(left, field.name)
         right_value = getattr(right, field.name)
-        if left_value != right_value:
-            differences.append({
-                "field": field.name,
-                "label": CONFIG_FIELD_LABELS.get(field.name, field.name),
-                "left": left_value,
-                "right": right_value,
-            })
+        if left_value == right_value:
+            continue
+        delta = _numeric_delta(left_value, right_value)
+        if delta is None:
+            direction = "changed"
+        elif delta == 0:
+            direction = "same"
+        else:
+            direction = "up" if delta > 0 else "down"
+        differences.append({
+            "field": field.name,
+            "label": CONFIG_FIELD_LABELS.get(field.name, field.name),
+            "left": left_value,
+            "right": right_value,
+            "delta": delta,
+            "direction": direction,
+        })
     return differences

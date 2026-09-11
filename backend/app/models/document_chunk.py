@@ -30,6 +30,10 @@ class DocumentChunk(Base):
     # P2-6：父子切片时标记角色与父片段序号，供后续父级扩展检索使用。
     chunk_role: Mapped[str] = mapped_column(String(16), default="normal", server_default="normal", index=True)
     parent_sequence_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # P2-6：父子切片时指向父片段，检索命中子片段时可返回父片段内容。
+    parent_chunk_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("document_chunks.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     content: Mapped[str] = mapped_column(Text)
     original_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)

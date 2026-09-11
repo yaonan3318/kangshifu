@@ -28,6 +28,7 @@ class DocumentResponse(BaseModel):
     relative_path: str | None
     version_number: int
     previous_version_id: uuid.UUID | None
+    superseded_by_id: uuid.UUID | None = None
     enabled: bool
     visibility: str
     owner_user_id: uuid.UUID | None
@@ -67,6 +68,8 @@ class DocumentChunkResponse(BaseModel):
     section_path: list[str]
     content: str
     ocr_confidence: float | None
+    chunk_role: str = "normal"
+    parent_chunk_id: uuid.UUID | None = None
 
 
 class DocumentContentResponse(BaseModel):

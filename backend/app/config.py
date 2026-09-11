@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     multi_query_count: int = 3
     dictionary_enabled: bool = True
     spelling_correction_enabled: bool = True
+    # P2-3：联网检索服务尚未接入；保持 False 时前端显示“联网服务未配置”，绝不假装已联网。
+    internet_search_enabled: bool = False
     rerank_enabled: bool = False
     rerank_model: str = "BAAI/bge-reranker-v2-m3"
     rerank_candidate_limit: int = 20

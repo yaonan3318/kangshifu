@@ -1,9 +1,12 @@
 """P2-0 质量基线纯单元测试：检索配置版本化与评测指标计算（不依赖数据库）。"""
 
+from types import SimpleNamespace
+
 from app.services.retrieval_config import RetrievalConfig, config_diff
 from app.services.retrieval_evaluation import RetrievalEvaluationService, _mean, _ratio
 
 _keypoint_coverage = RetrievalEvaluationService._keypoint_coverage
+_score_case = RetrievalEvaluationService._score_case
 
 
 def test_config_round_trip_and_defaults():
@@ -82,3 +85,94 @@ def test_search_service_accepts_config_overrides():
     assert config.vector_limit == 9
     assert config.rrf_k == 13
     assert config.min_evidence_score == 0.9
+
+
+# ---------------------------------------------------------------- 片段召回行为
+
+def _hit(document: str, chunk: str, content: str = "alpha secret") -> SimpleNamespace:
+    return SimpleNamespace(document_id=document, chunk_id=chunk, content=content)
+
+
+def _case(**overrides) -> SimpleNamespace:
+    values = {
+        "id": "case-1", "name": "用例", "question": "问题",
+        "expected_document_ids": [], "expected_chunk_ids": [],
+        "must_cite_document_ids": [], "forbidden_document_ids": [],
+        "expected_answer_keypoints": [], "expected_no_answer": False,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_chunk_recall_all_expected_chunks_hit():
+    case = _case(expected_chunk_ids=["c1", "c2"])
+    returned = [_hit("d1", "c1"), _hit("d2", "c2")]
+    result = _score_case(case, returned)
+    assert result["chunk_recall"] == 1.0
+    assert result["hit_rate_at_1"] == 1.0
+    assert result["hit_rate_at_5"] == 1.0
+
+
+def test_chunk_recall_partial_hit():
+    case = _case(expected_chunk_ids=["c1", "c2", "c3"])
+    returned = [_hit("d1", "c1")]
+    result = _score_case(case, returned)
+    assert result["chunk_recall"] == 0.3333
+    assert result["matched_chunk_ids"] == ["c1"]
+
+
+def test_chunk_recall_no_expected_chunks_is_full_score():
+    case = _case(expected_chunk_ids=[])
+    result = _score_case(case, [_hit("d1", "c1")])
+    assert result["chunk_recall"] == 1.0
+
+
+def test_chunk_recall_is_not_document_hit_proxy():
+    """同一文档命中多个片段不能冒充片段召回率满分。"""
+    case = _case(expected_document_ids=["d1"], expected_chunk_ids=["c1", "c2"])
+    returned = [_hit("d1", "c1"), _hit("d1", "cx"), _hit("d1", "cy")]
+    result = _score_case(case, returned)
+    assert result["document_recall"] == 1.0
+    # 只命中 c1（c2 未命中），因此片段召回率是 0.5，而不是 1.0。
+    assert result["chunk_recall"] == 0.5
+
+
+def test_excluded_document_recall_is_flagged():
+    case = _case(expected_chunk_ids=["c1"], forbidden_document_ids=["doc-x"])
+    returned = [_hit("doc-x", "c9"), _hit("d1", "c1")]
+    result = _score_case(case, returned)
+    assert result["forbidden_hits"] == ["doc-x"]
+    metrics = RetrievalEvaluationService._aggregate([result], include_answers=False)
+    assert metrics["forbidden_violation_count"] == 1
+
+
+def test_no_answer_question_accuracy():
+    answered_case = _case(expected_no_answer=True)
+    assert _score_case(answered_case, [])["no_answer_accuracy"] == 1.0
+    assert _score_case(answered_case, [_hit("d1", "c1")])["no_answer_accuracy"] == 0.0
+    # 期望有答案却什么都没召回，记为不准确。
+    assert _score_case(_case(expected_no_answer=False), [])["no_answer_accuracy"] == 0.0
+
+
+def test_metric_changes_reports_old_new_delta_and_latency_direction():
+    left = {"chunk_recall": 0.5, "answer_latency_ms": 200.0}
+    right = {"chunk_recall": 0.8, "answer_latency_ms": 150.0}
+    changes = {item["key"]: item for item in RetrievalEvaluationService._metric_changes(left, right)}
+    assert changes["chunk_recall"]["left"] == 0.5
+    assert changes["chunk_recall"]["right"] == 0.8
+    assert changes["chunk_recall"]["delta"] == 0.3
+    assert changes["chunk_recall"]["improved"] is True
+    # 耗时下降也是提升。
+    assert changes["answer_latency_ms"]["delta"] == -50.0
+    assert changes["answer_latency_ms"]["direction"] == "down"
+    assert changes["answer_latency_ms"]["improved"] is True
+
+
+def test_config_diff_reports_delta_and_direction():
+    left = RetrievalConfig(keyword_limit=10, rerank_enabled=False)
+    right = RetrievalConfig(keyword_limit=20, rerank_enabled=True)
+    differences = {item["field"]: item for item in config_diff(left, right)}
+    assert differences["keyword_limit"]["delta"] == 10
+    assert differences["keyword_limit"]["direction"] == "up"
+    assert differences["rerank_enabled"]["delta"] is None
+    assert differences["rerank_enabled"]["direction"] == "changed"

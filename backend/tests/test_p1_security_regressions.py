@@ -259,12 +259,14 @@ class P1SecurityRegressionTests(unittest.TestCase):
             self.assertIn(section, quality)
 
     def test_rag_emits_quality_events_and_marks_inference(self) -> None:
-        rag = source("backend/app/services/rag.py")
+        flow = source("backend/app/services/rag_flow.py")
         for snippet in (
             'type="confidence"', 'type="citation_check"', 'type="no_answer"',
-            "compute_confidence", "verify_answer", "mark_unsupported", "template_instruction",
+            "compute_confidence", "verify_answer", "mark_unsupported",
         ):
-            self.assertIn(snippet, rag)
+            self.assertIn(snippet, flow)
+        rag = source("backend/app/services/rag.py")
+        self.assertIn("template_instruction", rag)
 
     def test_hydrate_source_exposes_traceability(self) -> None:
         chat = source("backend/app/services/chat.py")
@@ -305,13 +307,17 @@ class P1SecurityRegressionTests(unittest.TestCase):
     def test_chatflow_nodes_and_graph_validation(self) -> None:
         service = source("backend/app/services/chatflow.py")
         for node_type in (
-            "start", "question_classify", "query_rewrite", "retrieval", "rerank", "condition",
-            "local_model", "deepseek", "harness", "answer_check", "final_answer",
+            "start", "classify", "context_completion", "query_rewrite", "multi_query",
+            "knowledge_search", "reranker", "condition", "local_model", "deepseek", "harness",
+            "answer_check", "final_answer",
+            # 兼容旧图节点类型
+            "question_classify", "retrieval", "rerank",
         ):
             self.assertIn(f'"{node_type}"', service)
         self.assertIn("def validate_graph", service)
         self.assertIn("def build_plan", service)
         self.assertIn("def debug_run", service)
+        self.assertIn("class ChatflowRunner", service)
         self.assertIn("CHATFLOW_GRAPH_CYCLE", service)
 
     def test_chatflow_versions_and_assistant_binding(self) -> None:
@@ -326,10 +332,13 @@ class P1SecurityRegressionTests(unittest.TestCase):
 
     def test_rag_service_uses_chatflow_plan_and_node_timings(self) -> None:
         rag = source("backend/app/services/rag.py")
-        self.assertIn("build_plan", rag)
-        self.assertIn("ChatflowPlan", rag)
-        self.assertIn("node_timings", rag)
-        self.assertIn("_apply_plan", rag)
+        self.assertIn("run_production_flow", rag)
+        self.assertIn("ChatflowService", rag)
+        flow = source("backend/app/services/rag_flow.py")
+        self.assertIn("ChatflowRunner", flow)
+        self.assertIn("build_plan", flow)
+        self.assertIn("node_timings", flow)
+        self.assertIn("flow_steps", flow)
 
     # ---- P2-5 用户体验与比赛展示 ----
 
@@ -353,9 +362,10 @@ class P1SecurityRegressionTests(unittest.TestCase):
             self.assertIn(field, stats)
         api = source("backend/app/api/stats.py")
         self.assertIn("/dashboard", api)
-        rag = source("backend/app/services/rag.py")
+        flow = source("backend/app/services/rag_flow.py")
         for stage in ('"understanding"', '"retrieving"', '"candidates"', '"checking"'):
-            self.assertIn(stage, rag)
+            self.assertIn(stage, flow)
+        rag = source("backend/app/services/rag.py")
         self.assertIn("_follow_up_suggestions", rag)
 
     # ---- P2-6 文档理解能力 ----
@@ -438,11 +448,20 @@ class P1SecurityRegressionTests(unittest.TestCase):
             ("0022_chatflow.py", "0022_chatflow", "0021_assistant_roles"),
             ("0023_knowledge_gaps.py", "0023_knowledge_gaps", "0022_chatflow"),
             ("0024_document_understanding.py", "0024_document_understanding", "0023_knowledge_gaps"),
+            ("0025_expected_chunks.py", "0025_expected_chunks", "0024_document_understanding"),
+            ("0026_retrieval_log_ranks.py", "0026_retrieval_log_ranks", "0025_expected_chunks"),
+            ("0027_reliability_and_scope.py", "0027_reliability_and_scope", "0026_retrieval_log_ranks"),
+            ("0028_answer_jobs.py", "0028_answer_jobs", "0027_reliability_and_scope"),
         ):
             content = (versions / filename).read_text(encoding="utf-8")
             self.assertIn(f'revision = "{revision}"', content)
             self.assertIn(f'down_revision = "{down_revision}"', content)
             self.assertIn("def downgrade()", content)
+
+    def test_answer_job_migration_backfills_existing_relationships(self) -> None:
+        migration = source("backend/migrations/versions/0028_answer_jobs.py")
+        self.assertIn("current.previous_version_id = previous.id", migration)
+        self.assertIn("child.parent_sequence_number = parent.sequence_number", migration)
 
     def test_frontend_dependencies_are_pinned(self) -> None:
         package = source("frontend/package.json")
@@ -454,6 +473,27 @@ class P1SecurityRegressionTests(unittest.TestCase):
             self.assertIn(field, model)
         answer_api = source("backend/app/api/answer.py")
         self.assertIn("apply_assistant_runtime_policy", answer_api)
+
+    def test_answer_runtime_policy_checks_both_deepseek_flags(self) -> None:
+        answer_api = source("backend/app/api/answer.py")
+        self.assertIn(
+            "assistant.deepseek_enabled and assistant.use_deepseek_allowed",
+            answer_api,
+        )
+
+    def test_production_flow_dispatches_deepseek_gate_condition(self) -> None:
+        flow = source("backend/app/services/rag_flow.py")
+        self.assertIn('if node.get("id") == "deepseek_gate"', flow)
+        self.assertIn("return await deepseek_gate(context, node)", flow)
+
+    def test_parent_expansion_uses_persisted_parent_chunk_id(self) -> None:
+        search = source("backend/app/services/search.py")
+        self.assertIn("item.chunk.parent_chunk_id is not None", search)
+        self.assertIn("self.session.get(DocumentChunk, parent_id)", search)
+
+    def test_historical_reference_uses_superseded_by_relation(self) -> None:
+        chat = source("backend/app/services/chat.py")
+        self.assertIn("bool(document.superseded_by_id)", chat)
 
     def test_answer_page_hides_runtime_policy_controls(self) -> None:
         answer_page = source("frontend/src/features/answer/AnswerPage.vue")

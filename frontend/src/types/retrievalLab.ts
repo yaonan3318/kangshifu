@@ -9,7 +9,7 @@ export interface RetrievalInspect {
 
 export interface DictionaryEntry {
   id: string
-  category: 'SYNONYM' | 'ABBREVIATION' | 'PROPER_NOUN'
+  category: 'SYNONYM' | 'ABBREVIATION' | 'PROPER_NOUN' | 'CROSS_LANGUAGE'
   term: string
   expansions: string[]
   enabled: boolean
@@ -35,6 +35,7 @@ export interface RetrievalCase {
   question: string
   knowledge_base_id: string | null
   expected_document_ids: string[]
+  expected_chunk_ids: string[]
   must_cite_document_ids: string[]
   forbidden_document_ids: string[]
   expected_keywords: string[]
@@ -71,12 +72,27 @@ export interface ConfigDifference {
   label: string
   left: unknown
   right: unknown
+  delta?: number | null
+  direction?: 'up' | 'down' | 'same' | 'changed'
+}
+
+export interface MetricChange {
+  key: string
+  label: string
+  left: number
+  right: number
+  delta: number
+  direction: 'up' | 'down' | 'same'
+  improved: boolean | null
+  unit: 'ratio' | 'ms'
+  lower_is_better: boolean
 }
 
 export interface RunCompare {
   left: RetrievalRun
   right: RetrievalRun
   metric_deltas: Record<string, number>
+  metric_changes: MetricChange[]
   config_differences: ConfigDifference[]
   case_changes: Array<Record<string, unknown>>
 }
