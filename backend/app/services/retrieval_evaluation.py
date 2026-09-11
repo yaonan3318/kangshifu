@@ -25,7 +25,7 @@ from app.schemas.retrieval_lab import (
     ConfigVersionCreate, ConfigVersionUpdate, EvaluationSetCreate, EvaluationSetUpdate,
     RunCreate, TestCaseCreate, TestCaseUpdate,
 )
-from app.schemas.search import SearchRequest
+from app.schemas.search import SearchRequest, SearchResult
 from app.services.rag import RagService
 from app.services.retrieval_config import RetrievalConfig, config_diff
 from app.services.search import SearchService

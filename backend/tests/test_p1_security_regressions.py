@@ -463,6 +463,10 @@ class P1SecurityRegressionTests(unittest.TestCase):
         self.assertIn("current.previous_version_id = previous.id", migration)
         self.assertIn("child.parent_sequence_number = parent.sequence_number", migration)
 
+    def test_retrieval_evaluation_imports_search_result_annotation(self) -> None:
+        evaluation = source("backend/app/services/retrieval_evaluation.py")
+        self.assertIn("from app.schemas.search import SearchRequest, SearchResult", evaluation)
+
     def test_frontend_dependencies_are_pinned(self) -> None:
         package = source("frontend/package.json")
         self.assertNotIn('"latest"', package)
