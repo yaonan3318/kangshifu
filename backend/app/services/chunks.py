@@ -9,6 +9,7 @@ from app.config import Settings
 from app.errors import AppError
 from app.models import Document, DocumentChunk
 from app.services.embeddings import EmbeddingService
+from app.services.feedback_triggers import trigger_reverify
 from app.services.keywords import keyword_text
 from app.services.permissions import PermissionResolver, require_manage, require_read
 
@@ -65,6 +66,10 @@ class ChunkService:
         chunk.manually_edited = True
         self.session.commit()
         self.session.refresh(chunk)
+        trigger_reverify(
+            self.session, document_ids=[chunk.document_id], chunk_ids=[chunk.id],
+            reason="chunk_changed",
+        )
         return chunk
 
     def restore_original(self, chunk_id: uuid.UUID) -> DocumentChunk:
@@ -82,6 +87,10 @@ class ChunkService:
         chunk.manually_edited = False
         self.session.commit()
         self.session.refresh(chunk)
+        trigger_reverify(
+            self.session, document_ids=[chunk.document_id], chunk_ids=[chunk.id],
+            reason="chunk_changed",
+        )
         return chunk
 
     def reindex(self, chunk_id: uuid.UUID) -> DocumentChunk:
@@ -93,6 +102,10 @@ class ChunkService:
         chunk.token_count = token_count
         self.session.commit()
         self.session.refresh(chunk)
+        trigger_reverify(
+            self.session, document_ids=[chunk.document_id], chunk_ids=[chunk.id],
+            reason="chunk_changed",
+        )
         return chunk
 
     def set_enabled(self, chunk_id: uuid.UUID, enabled: bool) -> DocumentChunk:
@@ -101,6 +114,10 @@ class ChunkService:
         chunk.enabled = enabled
         self.session.commit()
         self.session.refresh(chunk)
+        trigger_reverify(
+            self.session, document_ids=[chunk.document_id], chunk_ids=[chunk.id],
+            reason="chunk_changed",
+        )
         return chunk
 
     def _build_index(self, chunk: DocumentChunk, content: str) -> tuple[list[float], str, int]:

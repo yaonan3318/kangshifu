@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, fields
 from typing import Any
 
 from app.config import Settings
+from app.errors import AppError
 
 # 字段 -> 中文名，用于前端展示配置版本差异。
 def _to_bool(value: Any) -> bool:
@@ -28,6 +29,11 @@ _CASTS: dict[str, Any] = {
     "context_completion_enabled": _to_bool, "context_history_turns": int,
     "multi_query_enabled": _to_bool, "multi_query_count": int,
     "dictionary_enabled": _to_bool, "spelling_correction_enabled": _to_bool,
+    # P2-7B：反馈排序参数。
+    "feedback_ranking_enabled": _to_bool, "feedback_min_distinct_users": int,
+    "feedback_max_positive_boost": float, "feedback_max_negative_penalty": float,
+    "feedback_admin_verified_weight": float, "feedback_valid_days": int,
+    "feedback_exclude_disabled_users": _to_bool, "feedback_only_processed": _to_bool,
 }
 
 CONFIG_FIELD_LABELS: dict[str, str] = {
@@ -52,6 +58,21 @@ CONFIG_FIELD_LABELS: dict[str, str] = {
     "multi_query_count": "Multi-query 数量",
     "dictionary_enabled": "中文词典开关",
     "spelling_correction_enabled": "拼写纠正开关",
+    "feedback_ranking_enabled": "反馈影响排序开关",
+    "feedback_min_distinct_users": "反馈最少不同用户数",
+    "feedback_max_positive_boost": "反馈最大正向提升",
+    "feedback_max_negative_penalty": "反馈最大负向惩罚",
+    "feedback_admin_verified_weight": "管理员确认反馈权重",
+    "feedback_valid_days": "反馈有效天数(0=永久)",
+    "feedback_exclude_disabled_users": "排除停用用户反馈",
+    "feedback_only_processed": "只采用已处理反馈",
+}
+
+# 反馈排序参数的硬性边界；后端保存配置时必须强制校验，不能只靠前端输入范围。
+FEEDBACK_CONFIG_LIMITS: dict[str, tuple[float, float]] = {
+    "feedback_max_positive_boost": (0.0, 0.10),
+    "feedback_max_negative_penalty": (0.0, 0.15),
+    "feedback_admin_verified_weight": (0.0, 2.0),
 }
 
 
@@ -81,6 +102,15 @@ class RetrievalConfig:
     multi_query_count: int = 3
     dictionary_enabled: bool = True
     spelling_correction_enabled: bool = True
+    # P2-7B：反馈影响排序（默认关闭，达到样本门槛后做有界乘法微调）。
+    feedback_ranking_enabled: bool = False
+    feedback_min_distinct_users: int = 5
+    feedback_max_positive_boost: float = 0.08
+    feedback_max_negative_penalty: float = 0.10
+    feedback_admin_verified_weight: float = 1.5
+    feedback_valid_days: int = 0
+    feedback_exclude_disabled_users: bool = True
+    feedback_only_processed: bool = False
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "RetrievalConfig":
@@ -106,6 +136,14 @@ class RetrievalConfig:
             multi_query_count=settings.multi_query_count,
             dictionary_enabled=settings.dictionary_enabled,
             spelling_correction_enabled=settings.spelling_correction_enabled,
+            feedback_ranking_enabled=settings.search_feedback_ranking_enabled,
+            feedback_min_distinct_users=settings.search_feedback_min_distinct_users,
+            feedback_max_positive_boost=settings.search_feedback_max_positive_boost,
+            feedback_max_negative_penalty=settings.search_feedback_max_negative_penalty,
+            feedback_admin_verified_weight=settings.search_feedback_admin_verified_weight,
+            feedback_valid_days=settings.search_feedback_valid_days,
+            feedback_exclude_disabled_users=settings.search_feedback_exclude_disabled_users,
+            feedback_only_processed=settings.search_feedback_only_processed,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -148,6 +186,28 @@ def _numeric_delta(left_value: Any, right_value: Any) -> float | None:
     if isinstance(left_value, (int, float)) and isinstance(right_value, (int, float)):
         return round(float(right_value) - float(left_value), 4)
     return None
+
+
+def validate_feedback_config(config: RetrievalConfig) -> None:
+    """保存检索配置时强制校验反馈排序参数边界，防止通过请求参数绕过上限。"""
+    for field_name, (low, high) in FEEDBACK_CONFIG_LIMITS.items():
+        value = float(getattr(config, field_name))
+        if not (low <= value <= high):
+            raise AppError(
+                "INVALID_RETRIEVAL_CONFIG",
+                f"{CONFIG_FIELD_LABELS.get(field_name, field_name)}必须在 {low} 到 {high} 之间",
+                400, {"field": field_name, "min": low, "max": high, "value": value},
+            )
+    if int(config.feedback_min_distinct_users) < 3:
+        raise AppError(
+            "INVALID_RETRIEVAL_CONFIG", "反馈最少不同用户数不能小于 3", 400,
+            {"field": "feedback_min_distinct_users", "min": 3},
+        )
+    if int(config.feedback_valid_days) < 0:
+        raise AppError(
+            "INVALID_RETRIEVAL_CONFIG", "反馈有效天数不能为负数", 400,
+            {"field": "feedback_valid_days", "min": 0},
+        )
 
 
 def config_diff(left: RetrievalConfig, right: RetrievalConfig) -> list[dict[str, Any]]:

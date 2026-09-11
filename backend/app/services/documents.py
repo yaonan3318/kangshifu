@@ -20,6 +20,7 @@ from app.parsers import ParserRegistry
 from app.schemas.documents import DocumentFilters, DocumentUpdateRequest
 from app.services.chunking import ChunkingConfig, chunk_blocks
 from app.services.file_types import detect_allowed_type
+from app.services.feedback_triggers import trigger_reverify
 from app.services.managed_storage import ManagedStorage
 from app.services.permissions import PermissionResolver, require_manage, require_read
 
@@ -143,6 +144,7 @@ class DocumentService:
         document.deleted_at = datetime.now(UTC)
         document.deleted_reason = reason.strip() if reason else None
         self.session.commit()
+        trigger_reverify(self.session, document_ids=[document_id], reason="document_deleted")
 
     def restore(self, document_id: uuid.UUID) -> Document:
         document = self.get(document_id, include_deleted=True)
@@ -153,6 +155,7 @@ class DocumentService:
         document.deleted_reason = None
         self.session.commit()
         self.session.refresh(document)
+        trigger_reverify(self.session, document_ids=[document_id], reason="document_restored")
         return document
 
     def purge(self, document_id: uuid.UUID) -> None:
@@ -164,6 +167,7 @@ class DocumentService:
             self.storage.delete(document.stored_path)
             self.session.delete(document)
             self.session.commit()
+            trigger_reverify(self.session, document_ids=[document_id], reason="document_purged")
         except Exception as exc:
             self.session.rollback()
             document = self.get(document_id, include_deleted=True)
@@ -178,6 +182,7 @@ class DocumentService:
         document.enabled = enabled
         self.session.commit()
         self.session.refresh(document)
+        trigger_reverify(self.session, document_ids=[document_id], reason="document_enabled_changed")
         return document
 
     def update(self, document_id: uuid.UUID, body: DocumentUpdateRequest) -> Document:
@@ -211,6 +216,7 @@ class DocumentService:
             document.valid_until = body.valid_until
         self.session.commit()
         self.session.refresh(document)
+        trigger_reverify(self.session, document_ids=[document.id], reason="document_updated")
         return self.get(document.id)
 
     def preview_chunks(
@@ -310,6 +316,7 @@ class DocumentService:
                 ))
         self.session.commit()
         self.session.refresh(document)
+        trigger_reverify(self.session, document_ids=[document.id], reason="document_access_changed")
         return self.get(document.id)
 
     def set_external_policy(
@@ -322,6 +329,7 @@ class DocumentService:
         document.external_llm_allowed = external_llm_allowed
         self.session.commit()
         self.session.refresh(document)
+        trigger_reverify(self.session, document_ids=[document.id], reason="document_policy_changed")
         return self.get(document.id)
 
     def _knowledge_base(self, knowledge_base_id: uuid.UUID) -> KnowledgeBase:
@@ -369,4 +377,5 @@ class DocumentService:
         document.jobs.append(ProcessingJob(job_type=JobType.PARSE, status=JobStatus.QUEUED))
         self.session.commit()
         self.session.refresh(document)
+        trigger_reverify(self.session, document_ids=[document_id], reason="document_reprocessed")
         return document

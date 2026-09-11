@@ -53,6 +53,11 @@ class SearchResult(BaseModel):
     final_score: float
     base_score: float | None = None
     feedback_boost: float = 0.0
+    feedback_applied: bool = False
+    feedback_sample_count: int = 0
+    feedback_reason: str | None = None
+    knowledge_base_id: uuid.UUID | None = None
+    retrieval_config_version_id: uuid.UUID | None = None
     pre_rerank_rank: int | None = None
     post_rerank_rank: int | None = None
 

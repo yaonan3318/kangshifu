@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     search_feedback_ranking_enabled: bool = False
     search_feedback_min_samples: int = 5
     search_feedback_max_boost: float = 0.05
+    # P2-7B：反馈微调的细分参数（可被检索配置版本覆盖）。
+    search_feedback_min_distinct_users: int = 5
+    search_feedback_max_positive_boost: float = 0.08
+    search_feedback_max_negative_penalty: float = 0.10
+    search_feedback_admin_verified_weight: float = 1.5
+    search_feedback_valid_days: int = 0
+    search_feedback_exclude_disabled_users: bool = True
+    search_feedback_only_processed: bool = False
     search_synonyms: str = "k8s|kubernetes|容器编排;气泡项目|气泡检测|bubble;日报|工作记录|周报"
     # P2-1 检索准确性：Query Rewrite / 上下文补全 / Multi-query / 中文词典 / 拼写纠正。
     # 默认关闭 LLM 改写与多查询，避免改变既有行为与延迟；管理员可在检索配置版本中开启。

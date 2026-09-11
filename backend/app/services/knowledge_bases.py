@@ -1,5 +1,7 @@
 """知识库业务：管理资料域并保护最后一个可用知识库。"""
 
+from __future__ import annotations
+
 import uuid
 
 from sqlalchemy import func, select
@@ -8,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.errors import AppError
 from app.models import Document, KnowledgeBase
+from app.services.feedback_triggers import trigger_reverify
 
 
 class KnowledgeBaseService:
@@ -61,6 +64,10 @@ class KnowledgeBaseService:
             self.session.rollback()
             raise AppError("KNOWLEDGE_BASE_NAME_EXISTS", "知识库名称已经存在", 409) from None
         self.session.refresh(value)
+        trigger_reverify(
+            self.session, document_ids=self._document_ids(knowledge_base_id),
+            reason="knowledge_base_updated",
+        )
         return value
 
     def set_enabled(self, knowledge_base_id: uuid.UUID, enabled: bool) -> KnowledgeBase:
@@ -72,4 +79,13 @@ class KnowledgeBaseService:
         value.enabled = enabled
         self.session.commit()
         self.session.refresh(value)
+        trigger_reverify(
+            self.session, document_ids=self._document_ids(knowledge_base_id),
+            reason="knowledge_base_enabled_changed",
+        )
         return value
+
+    def _document_ids(self, knowledge_base_id: uuid.UUID) -> list[uuid.UUID]:
+        return list(self.session.scalars(
+            select(Document.id).where(Document.knowledge_base_id == knowledge_base_id)
+        ))

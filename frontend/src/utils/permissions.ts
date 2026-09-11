@@ -13,6 +13,11 @@ export type PermissionCode =
   | 'IDENTITY_MANAGE'
   | 'AUDIT_VIEW'
   | 'STATS_VIEW'
+  | 'FEEDBACK_VIEW'
+  | 'FEEDBACK_MANAGE'
+  | 'FEEDBACK_ASSIGN'
+  | 'FEEDBACK_VERIFY'
+  | 'FEEDBACK_STATISTICS'
   | 'HARNESS_USE'
 
 const permissionSet = ref<Set<string>>(new Set())

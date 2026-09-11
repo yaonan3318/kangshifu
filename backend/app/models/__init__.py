@@ -22,7 +22,10 @@ from app.models.knowledge_gap import KnowledgeGap, KnowledgeGapReason, Knowledge
 from app.models.chat import ChatMessage, ChatMessageRole, ChatMessageSource, ChatMessageStatus, ChatProvider, ChatSession
 from app.models.assistant import DEFAULT_ASSISTANT_ID, Assistant, assistant_knowledge_bases
 from app.models.feedback import (
-    AnswerFeedback, AnswerFeedbackDocument, DocumentFeedbackStats, FeedbackRating,
+    AnswerFeedback, AnswerFeedbackDocument, DocumentFeedbackStats,
+    FeedbackAggregate, FeedbackCase, FeedbackCaseEvent, FeedbackCaseStatus,
+    FeedbackHistory, FeedbackPriority, FeedbackRating, FeedbackRetrievalSnapshot,
+    FeedbackType, FeedbackVerificationRun, VerificationStatus,
 )
 from app.models.answer_job import AnswerJob, AnswerJobStatus, TERMINAL_STATUSES
 
@@ -39,5 +42,8 @@ __all__ = [
     "AclPermission", "AuthSession", "Department", "DocumentAcl", "DocumentVisibility",
     "Role", "SubjectType", "User", "user_roles", "AuditLog", "AnswerFeedback", "FeedbackRating",
     "DocumentFeedbackStats", "AnswerFeedbackDocument", "Permission", "role_permissions",
+    "FeedbackType", "FeedbackCase", "FeedbackCaseStatus", "FeedbackPriority",
+    "FeedbackCaseEvent", "FeedbackHistory", "FeedbackRetrievalSnapshot",
+    "FeedbackAggregate", "FeedbackVerificationRun", "VerificationStatus",
     "AnswerJob", "AnswerJobStatus", "TERMINAL_STATUSES",
 ]

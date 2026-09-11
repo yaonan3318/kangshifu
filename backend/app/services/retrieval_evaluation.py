@@ -27,7 +27,8 @@ from app.schemas.retrieval_lab import (
 )
 from app.schemas.search import SearchRequest, SearchResult
 from app.services.rag import RagService
-from app.services.retrieval_config import RetrievalConfig, config_diff
+from app.services.feedback_triggers import trigger_reverify
+from app.services.retrieval_config import RetrievalConfig, config_diff, validate_feedback_config
 from app.services.search import SearchService
 
 METRIC_KEYS = (
@@ -355,6 +356,7 @@ class RetrievalEvaluationService:
 
     def create_config_version(self, body: ConfigVersionCreate) -> RetrievalConfigVersion:
         normalized = RetrievalConfig.from_dict(body.config, base=RetrievalConfig.from_settings(self.settings))
+        validate_feedback_config(normalized)
         value = RetrievalConfigVersion(
             name=body.name.strip(), description=body.description,
             config=normalized.to_dict(), is_default=False,
@@ -365,6 +367,9 @@ class RetrievalEvaluationService:
             self._set_default(value)
         self.session.commit()
         self.session.refresh(value)
+        trigger_reverify(
+            self.session, config_version_id=value.id, reason="retrieval_config_created",
+        )
         return value
 
     def update_config_version(self, config_id: uuid.UUID, body: ConfigVersionUpdate) -> RetrievalConfigVersion:
@@ -375,13 +380,18 @@ class RetrievalEvaluationService:
         if "description" in supplied:
             value.description = body.description
         if "config" in supplied and body.config is not None:
-            value.config = RetrievalConfig.from_dict(
+            normalized = RetrievalConfig.from_dict(
                 body.config, base=RetrievalConfig.from_settings(self.settings),
-            ).to_dict()
+            )
+            validate_feedback_config(normalized)
+            value.config = normalized.to_dict()
         if body.is_default:
             self._set_default(value)
         self.session.commit()
         self.session.refresh(value)
+        trigger_reverify(
+            self.session, config_version_id=value.id, reason="retrieval_config_updated",
+        )
         return value
 
     def delete_config_version(self, config_id: uuid.UUID) -> None:

@@ -4,11 +4,13 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Query, Request, Response, UploadFile, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.auth import current_user
 from app.config import Settings, get_settings
 from app.db import get_session
+from app.models import RetrievalConfigVersion
 from app.schemas.retrieval_lab import (
     CaseImportResult, ConfigVersionCreate, ConfigVersionListResponse, ConfigVersionResponse,
     ConfigVersionUpdate, DictionaryEntryCreate, DictionaryEntryResponse, DictionaryEntryUpdate,
@@ -19,6 +21,7 @@ from app.schemas.retrieval_lab import (
 )
 from app.schemas.search import SearchRequest
 from app.services.dictionaries import DictionaryService
+from app.services.feedback_ranking import FeedbackRankingService
 from app.services.query_rewrite import QueryRewriteService
 from app.services.rbac import require_permission
 from app.services.retrieval_config import load_active_config
@@ -66,7 +69,49 @@ async def inspect(body: RetrievalInspectRequest, http_request: Request, session:
     )
 
 
-# ---------------------------------------------------------------- 评测集
+@router.post("/analyze")
+async def analyze(
+    body: RetrievalInspectRequest,
+    http_request: Request,
+    session: Annotated[Session, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict:
+    """针对单个问题返回检索与反馈修正明细，便于解释排序为什么变化。"""
+    user = require_permission(current_user(http_request), RETRIEVAL_LAB_USE)
+    config = load_active_config(session, settings)
+    rewriter = QueryRewriteService(settings, config)
+    rewrite = await rewriter.rewrite(body.query, body.history)
+    queries = await rewriter.multi_query(rewrite.retrieval_query)
+    if rewrite.retrieval_query not in queries:
+        queries.insert(0, rewrite.retrieval_query)
+    outcome = SearchService(session, settings, user=user, config=config).search_with_diagnostics(
+        SearchRequest(
+            query=rewrite.retrieval_query, knowledge_base_id=body.knowledge_base_id,
+            limit=body.limit, include_stages=True,
+        ),
+        extra_queries=queries[1:],
+    )
+    ranking = FeedbackRankingService(session, settings, config=config)
+    config_version_id = session.scalar(
+        select(RetrievalConfigVersion.id).where(RetrievalConfigVersion.is_default.is_(True)).limit(1)
+    )
+    items = []
+    for item in outcome.items:
+        payload = item.model_dump()
+        payload["feedback_adjustment"] = item.feedback_boost
+        payload["retrieval_config_version_id"] = config_version_id
+        items.append(payload)
+    return {
+        "items": items,
+        "diagnostics": outcome.diagnostics.model_dump(),
+        "query_rewrite": rewrite.to_info(),
+        "queries": queries,
+        "feedback": {
+            "enabled": ranking.enabled,
+            "parameters": ranking._parameters(),
+            "retrieval_config_version_id": config_version_id,
+        },
+    }# ---------------------------------------------------------------- 评测集
 
 @router.get("/evaluation-sets", response_model=EvaluationSetListResponse)
 def list_evaluation_sets(service: Annotated[RetrievalEvaluationService, Depends(get_service)]):

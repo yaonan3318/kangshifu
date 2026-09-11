@@ -317,6 +317,15 @@ function directionLabel(direction?: string): string {
 }
 
 onMounted(load)
+
+onMounted(() => {
+  const pending = window.localStorage.getItem('company-search:retrieval-lab-query')
+  if (pending) {
+    window.localStorage.removeItem('company-search:retrieval-lab-query')
+    question.value = pending
+    void inspect()
+  }
+})
 </script>
 
 <template>

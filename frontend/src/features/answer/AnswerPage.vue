@@ -947,10 +947,11 @@ async function sendFeedback(turn: AnswerTurn, rating: 'UP' | 'DOWN') {
   if (turn.feedbackSubmitting) return
   const reasons = rating === 'DOWN' ? (turn.feedbackReasons ?? []) : []
   const comment = rating === 'DOWN' ? (turn.feedbackComment ?? '').trim() : ''
+  const feedbackType = reporting ? 'REPORT' : rating
   turn.feedbackSubmitting = true
   turn.feedbackNotice = null
   try {
-    await submitFeedback({ messageId: turn.assistantMessageId, rating, reasons, comment })
+    await submitFeedback({ messageId: turn.assistantMessageId, rating, feedbackType, reasons, comment })
     turn.feedbackRating = rating
     turn.feedbackMode = false
     turn.feedbackNotice = {

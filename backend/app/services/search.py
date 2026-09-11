@@ -35,6 +35,9 @@ class Candidate:
     final_score: float = 0.0
     adjusted_score: float = 0.0
     feedback_boost: float = 0.0
+    feedback_applied: bool = False
+    feedback_reason: str | None = None
+    feedback_sample_count: int = 0
     pre_rerank_rank: int | None = None
     post_rerank_rank: int | None = None
     sources: set[str] | None = None
@@ -63,7 +66,7 @@ class SearchService:
             spelling_correction=self.config.spelling_correction_enabled,
         )
         self.reranker = Reranker(settings)
-        self.feedback = FeedbackRankingService(session, settings)
+        self.feedback = FeedbackRankingService(session, settings, config=self.config)
         # 普通用户只检索对其可见的资料；管理员/无用户上下文不限制。
         self.resolver = PermissionResolver(session, user) if user is not None else None
 
@@ -161,7 +164,7 @@ class SearchService:
         mark = perf_counter()
         ranked, warning, mode = self._rerank(processed.normalized, candidates)
         timings["rerank"] = self._milliseconds(mark)
-        ranked = self._apply_feedback(ranked)
+        ranked = self._apply_feedback(ranked, processed.normalized)
         # P2-6：父子切片命中子片段时返回父片段内容，提供更完整的上下文。
         ranked = self._expand_parents(ranked)
         accepted = self._accept(ranked, request.limit)
@@ -352,17 +355,38 @@ class SearchService:
             item.post_rerank_rank = index
         return ordered, outcome.warning, "hybrid_rerank"
 
-    def _apply_feedback(self, candidates: list[Candidate]) -> list[Candidate]:
-        """在已召回候选上叠加反馈调整分；阈值仍按原始分判断，防止绕过证据门槛。"""
+    def _apply_feedback(self, candidates: list[Candidate], query: str) -> list[Candidate]:
+        """在已召回候选上叠加反馈微调；阈值仍按原始分判断，防止绕过证据门槛。
+
+        反馈只作用于已经被关键词/向量召回的片段，且基础相关性必须达标；
+        未达标、未召回、无权限、停用或删除的资料不会因为反馈进入结果。
+        """
         if not self.feedback.enabled or not candidates:
             return candidates
-        boosts = self.feedback.boosts([item.document.id for item in candidates])
-        if not boosts:
-            return candidates
+        items: list[tuple[uuid.UUID, uuid.UUID]] = []
         for item in candidates:
-            boost = boosts.get(item.document.id, 0.0)
-            item.feedback_boost = boost
-            item.adjusted_score = max(0.0, min(1.0, item.final_score + boost))
+            knowledge_base_id = getattr(item.document, "knowledge_base_id", None)
+            if knowledge_base_id is not None:
+                items.append((item.chunk.id, knowledge_base_id))
+        if not items:
+            return candidates
+        adjustments = self.feedback.adjustments(query, items)
+        for item in candidates:
+            adjustment = adjustments.get(item.chunk.id)
+            if adjustment is None:
+                item.adjusted_score = item.final_score
+                continue
+            # 相关性保护：基础分未达阈值时反馈完全不生效。
+            if item.final_score < self.config.min_evidence_score:
+                item.feedback_applied = False
+                item.feedback_reason = "base_relevance_below_threshold"
+                item.adjusted_score = item.final_score
+                continue
+            item.feedback_boost = adjustment.boost
+            item.feedback_applied = adjustment.applied
+            item.feedback_reason = adjustment.reason
+            item.feedback_sample_count = adjustment.effective_users
+            item.adjusted_score = max(0.0, min(1.0, item.final_score * (1.0 + adjustment.boost)))
         return sorted(candidates, key=lambda item: (-item.adjusted_score, str(item.chunk.id)))
 
     def _expand_parents(self, candidates: list[Candidate]) -> list[Candidate]:
@@ -402,6 +426,8 @@ class SearchService:
             vector_score=item.vector_score, fusion_score=item.fusion_score,
             rerank_score=item.rerank_score, final_score=item.final_score,
             adjusted_score=item.adjusted_score, feedback_boost=item.feedback_boost,
+            feedback_applied=item.feedback_applied, feedback_reason=item.feedback_reason,
+            feedback_sample_count=item.feedback_sample_count,
             pre_rerank_rank=item.pre_rerank_rank, post_rerank_rank=item.post_rerank_rank,
             sources=item.sources,
         )
@@ -426,7 +452,7 @@ class SearchService:
         chunk, document = candidate.chunk, candidate.document
         sources = candidate.sources or set()
         match_type = "hybrid" if len(sources) == 2 else (next(iter(sources)) if sources else "vector")
-        final_score = candidate.adjusted_score if candidate.feedback_boost else candidate.final_score
+        final_score = candidate.adjusted_score if candidate.feedback_applied else candidate.final_score
         return SearchResult(
             chunk_id=chunk.id, document_id=document.id, document_name=document.original_name,
             extension=document.extension, document_version=document.version_number,
@@ -437,6 +463,9 @@ class SearchService:
             keyword_score=candidate.keyword_score, vector_score=candidate.vector_score,
             fusion_score=candidate.fusion_score, rerank_score=candidate.rerank_score,
             final_score=final_score, base_score=candidate.final_score, feedback_boost=candidate.feedback_boost,
+            feedback_applied=candidate.feedback_applied, feedback_sample_count=candidate.feedback_sample_count,
+            feedback_reason=candidate.feedback_reason,
+            knowledge_base_id=getattr(document, "knowledge_base_id", None),
             pre_rerank_rank=candidate.pre_rerank_rank, post_rerank_rank=candidate.post_rerank_rank,
         )
 

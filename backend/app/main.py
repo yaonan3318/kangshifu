@@ -33,6 +33,7 @@ from app.api.retrieval_lab import router as retrieval_lab_router
 from app.api.chat import router as chat_router
 from app.api.audit import router as audit_router
 from app.api.feedback import router as feedback_router
+from app.api.feedback_admin import router as feedback_admin_router
 from app.api.stats import router as stats_router
 from app.config import Settings, get_settings
 from app.db import SessionLocal, get_session
@@ -133,7 +134,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """把可预期的业务异常统一转换成前端可识别的 JSON 结构。"""
         denial_codes = (
             "ADMIN_REQUIRED", "HARNESS_FORBIDDEN", "PERMISSION_DENIED",
-            "DOCUMENT_FORBIDDEN", "DOCUMENT_MANAGE_FORBIDDEN",
+            "DOCUMENT_FORBIDDEN", "DOCUMENT_MANAGE_FORBIDDEN", "FEEDBACK_FORBIDDEN",
         )
         if exc.code in denial_codes:
             missing = (exc.details or {}).get("permission")
@@ -202,6 +203,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(roles_router)
     app.include_router(audit_router)
     app.include_router(feedback_router)
+    app.include_router(feedback_admin_router)
     app.include_router(stats_router)
     return app
 

@@ -32,7 +32,7 @@ const tabs: TabDef[] = [
   { key: 'roles', label: '角色', component: RoleAdmin, permission: 'IDENTITY_MANAGE' },
   { key: 'assistants', label: '助手', component: AssistantManager, permission: 'ASSISTANT_MANAGE' },
   { key: 'chatflows', label: '流程', component: ChatflowManager, permission: 'ASSISTANT_MANAGE' },
-  { key: 'feedback', label: '反馈', component: FeedbackAdmin, superOnly: true },
+  { key: 'feedback', label: '反馈', component: FeedbackAdmin, permission: 'FEEDBACK_VIEW' },
   { key: 'gaps', label: '知识缺口', component: KnowledgeGapAdmin, permission: 'STATS_VIEW' },
   { key: 'audit', label: '审计', component: AuditAdmin, permission: 'AUDIT_VIEW' },
   { key: 'stats', label: '统计', component: StatsAdmin, permission: 'STATS_VIEW' },

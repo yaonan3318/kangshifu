@@ -31,7 +31,10 @@ const pages: Record<PageKey, unknown> = {
 
 const activePage = computed(() => pages[page.value])
 
-const SYSTEM_PERMISSIONS = ['IDENTITY_MANAGE', 'ASSISTANT_MANAGE', 'AUDIT_VIEW', 'STATS_VIEW'] as const
+const SYSTEM_PERMISSIONS = [
+  'IDENTITY_MANAGE', 'ASSISTANT_MANAGE', 'AUDIT_VIEW', 'STATS_VIEW',
+  'FEEDBACK_VIEW', 'FEEDBACK_MANAGE', 'FEEDBACK_STATISTICS',
+] as const
 
 const navItems = computed(() => {
   const items: Array<{ key: PageKey; label: string }> = [{ key: 'dashboard', label: '首页' }]
