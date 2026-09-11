@@ -467,6 +467,12 @@ class P1SecurityRegressionTests(unittest.TestCase):
         evaluation = source("backend/app/services/retrieval_evaluation.py")
         self.assertIn("from app.schemas.search import SearchRequest, SearchResult", evaluation)
 
+    def test_embedding_runtime_load_is_offline_but_setup_may_download(self) -> None:
+        embeddings = source("backend/app/services/embeddings.py")
+        self.assertIn("_load_model(self.settings.embedding_model, str(self.settings.models_root), True)", embeddings)
+        self.assertIn("_load_model(self.settings.embedding_model, str(self.settings.models_root), False)", embeddings)
+        self.assertIn("local_files_only=local_files_only", embeddings)
+
     def test_frontend_dependencies_are_pinned(self) -> None:
         package = source("frontend/package.json")
         self.assertNotIn('"latest"', package)

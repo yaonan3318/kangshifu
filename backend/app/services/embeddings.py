@@ -16,10 +16,13 @@ class EmbeddingService:
     @property
     def model(self) -> SentenceTransformer:
         self.settings.ensure_directories()
-        return _load_model(self.settings.embedding_model, str(self.settings.models_root))
+        # 正常运行只读取 setup 阶段准备好的缓存，避免断网时 Hugging Face HEAD 重试阻塞检索。
+        return _load_model(self.settings.embedding_model, str(self.settings.models_root), True)
 
     def ensure_model(self) -> None:
-        _ = self.model
+        self.settings.ensure_directories()
+        # setup 阶段允许联网下载；与运行阶段的离线加载使用不同缓存键。
+        _load_model(self.settings.embedding_model, str(self.settings.models_root), False)
 
     def encode_documents(self, texts: list[str]) -> list[list[float]]:
         """批量编码并归一化文本向量，供 pgvector 计算余弦距离。"""
@@ -38,6 +41,13 @@ class EmbeddingService:
         return self.encode_documents([query])[0]
 
 
-@lru_cache(maxsize=2)
-def _load_model(model_name: str, cache_folder: str) -> SentenceTransformer:
-    return SentenceTransformer(model_name, cache_folder=cache_folder, trust_remote_code=False)
+@lru_cache(maxsize=4)
+def _load_model(
+    model_name: str, cache_folder: str, local_files_only: bool,
+) -> SentenceTransformer:
+    return SentenceTransformer(
+        model_name,
+        cache_folder=cache_folder,
+        trust_remote_code=False,
+        local_files_only=local_files_only,
+    )
