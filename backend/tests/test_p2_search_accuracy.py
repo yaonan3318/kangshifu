@@ -186,6 +186,22 @@ def test_rerank_degrades_to_rrf_when_model_unavailable():
     assert [item.pre_rerank_rank for item in ranked] == [item.post_rerank_rank for item in ranked]
 
 
+def test_weak_synonym_only_candidate_does_not_pass_evidence_threshold():
+    """只命中“工作记录”等弱扩展词的无关文档不能混入“日报”结果。"""
+    config = RetrievalConfig(dictionary_enabled=False, min_evidence_score=0.35)
+    service = SearchService(session=None, settings=SimpleNamespace(), config=config)
+    diary = _candidate("diary", "日报汇总.txt")
+    java = _candidate("java", "Java编程思想.pdf")
+
+    fused = service._fuse_lists([
+        ("keyword", [diary], 1.0),
+        ("keyword", [java], service.EXPANSION_WEIGHT),
+        ("vector", [], 1.0),
+    ], "日报")
+
+    assert [item.document.original_name for item in service._accept(fused, 10)] == ["日报汇总.txt"]
+
+
 def test_retrieval_config_has_new_p2_fields():
     config = RetrievalConfig.from_dict({
         "query_rewrite_enabled": "true", "multi_query_enabled": 1, "multi_query_count": "4",
@@ -200,8 +216,8 @@ def test_retrieval_config_has_new_p2_fields():
 
 # ---------------------------------------------------------------- 生产链路接线
 
-def test_dictionary_expansion_reaches_both_keyword_and_vector_recall():
-    """管理员词典扩展必须真正进入生产检索的两路召回，而不是只记录在诊断里。"""
+def test_dictionary_expansion_reaches_keyword_and_vector_recall():
+    """管理员词典扩展进入召回，同时保留原词关键词查询用于强弱分层。"""
     from app.schemas.search import SearchRequest
 
     config = RetrievalConfig(
@@ -210,11 +226,12 @@ def test_dictionary_expansion_reaches_both_keyword_and_vector_recall():
     service = SearchService(
         session=None, settings=SimpleNamespace(search_feedback_ranking_enabled=False), config=config,
     )
-    captured: dict[str, str] = {}
-    service._keyword_candidates = lambda query, request: captured.__setitem__("keyword", query) or []
+    captured: dict[str, object] = {"keyword": []}
+    service._keyword_candidates = lambda query, request: captured["keyword"].append(query) or []
     service._vector_candidates = lambda query, request: captured.__setitem__("vector", query) or []
     service.search_with_diagnostics(SearchRequest(query="k8s 部署"))
-    assert "kubernetes" in captured["keyword"]
+    assert any("k8s" in query for query in captured["keyword"])
+    assert any("kubernetes" in query for query in captured["keyword"])
     assert "kubernetes" in captured["vector"]
 
 

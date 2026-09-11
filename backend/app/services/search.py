@@ -47,6 +47,9 @@ class SearchOutcome:
 
 
 class SearchService:
+    # 同义词是补充召回，不应与用户原始词等权；否则“工作记录”一类宽泛词会引入噪声。
+    EXPANSION_WEIGHT = 0.3
+
     def __init__(self, session: Session, settings: Settings, user=None, config: RetrievalConfig | None = None):
         self.session = session
         self.settings = settings
@@ -124,18 +127,26 @@ class SearchService:
             if not item.normalized:
                 continue
             mark = perf_counter()
-            # 关键词召回也使用词典扩展后的文本，使管理员维护的同义词/缩写/中英文映射
-            # 同时影响关键词与向量两路召回，而不是只影响向量。
-            # 扩展词是原词的替代表达，应该扩大召回范围。websearch_to_tsquery
-            # 会保留每个表达内部的 AND 关系，并用显式 OR 连接不同表达。
-            keyword = self._keyword_candidates(self._keyword_query_text(item), request)
+            # 原词与词典扩展词分开召回：原词保留完整权重，扩展词只作为低权重补充。
+            # 这样既能识别同义词/缩写，也不会让“工作记录”等宽泛扩展词压过“日报”。
+            original_keyword = self._keyword_candidates(keyword_text(item.normalized), request)
+            expanded_query = self._keyword_query_text(item, include_original=False)
+            expanded_keyword = (
+                self._keyword_candidates(expanded_query, request) if expanded_query else []
+            )
             keyword_ms += self._milliseconds(mark)
             mark = perf_counter()
             vector = self._vector_candidates(item.retrieval_text, request)
             vector_ms += self._milliseconds(mark)
-            keyword_all = self._merge_candidates(keyword_all, keyword)
+            keyword_all = self._merge_candidates(keyword_all, original_keyword)
+            keyword_all = self._merge_candidates(keyword_all, expanded_keyword)
             vector_all = self._merge_candidates(vector_all, vector)
-            ranked_lists.append(("keyword", keyword, self.config.keyword_weight))
+            ranked_lists.append(("keyword", original_keyword, self.config.keyword_weight))
+            if expanded_keyword:
+                ranked_lists.append((
+                    "keyword", expanded_keyword,
+                    self.config.keyword_weight * self.EXPANSION_WEIGHT,
+                ))
             ranked_lists.append(("vector", vector, self.config.vector_weight))
         timings["keyword"] = round(keyword_ms, 2)
         timings["vector"] = round(vector_ms, 2)
@@ -257,9 +268,13 @@ class SearchService:
         return [Candidate(row[0], row[1], keyword_score=float(row[2] or 0), sources={"keyword"}) for row in rows]
 
     @staticmethod
-    def _keyword_query_text(processed) -> str:
+    def _keyword_query_text(processed, *, include_original: bool = True) -> str:
         """把原始表达和同义表达组成 OR 查询，避免扩展后召回反而变窄。"""
-        alternatives = [processed.normalized, *processed.expanded_terms]
+        alternatives = (
+            [processed.normalized, *processed.expanded_terms]
+            if include_original
+            else processed.expanded_terms
+        )
         return " OR ".join(
             tokens for value in alternatives if (tokens := keyword_text(value))
         )

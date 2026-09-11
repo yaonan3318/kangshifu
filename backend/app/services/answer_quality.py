@@ -10,6 +10,7 @@ from app.schemas.answer import AnswerSource
 from app.services.keywords import keyword_text
 
 CITATION_PATTERN = re.compile(r"\[(\d+)\]")
+MODEL_CITATION_PATTERN = re.compile(r"\[[nN]\s*(\d+)\]")
 SENTENCE_PATTERN = re.compile(r"[^。！？!?\n]+[。！？!?\n]?")
 
 # 无答案/低置信度归因码
@@ -59,7 +60,7 @@ QUESTION_TYPES = {
     },
     "SUMMARY": {
         "label": "汇总问题",
-        "keywords": ["汇总", "总结", "综述", "归纳", "概览", "梳理", "有哪些"],
+        "keywords": ["汇总", "总结", "综述", "归纳", "概览", "梳理", "有哪些", "日报", "周报"],
         "sections": ["主题归类", "关键结论", "引用来源"],
     },
     GENERAL: {
@@ -86,8 +87,14 @@ def template_instruction(question_type: str) -> str:
     sections = "、".join(config["sections"])
     return (
         f"这是一个{config['label']}。请严格按以下结构组织答案（用简短小标题）：{sections}。"
-        "结构中的每一项都要有内部资料依据并带[n]引用；没有依据的部分必须省略或标注“推断”。"
+        "结构中的每一项都要有内部资料依据，并使用[1]、[2]这样的数字编号引用；"
+        "不要输出[n]或[n1]。没有依据的部分必须省略，不要为了填满结构而推测。"
     )
+
+
+def normalize_citations(answer: str) -> str:
+    """修复模型偶发照抄占位符产生的 [n1]，再交给引用校验器处理。"""
+    return MODEL_CITATION_PATTERN.sub(r"[\1]", answer)
 
 
 @dataclass(frozen=True)

@@ -444,7 +444,8 @@ class RagService:
         )
         system = (
             role_line
-            + "每个关键结论使用真实的[n]编号引用；不得创造不存在的引用，也不要输出隐藏推理过程。"
+            + "每个关键结论使用真实的数字编号引用，例如[1]或[2]；绝对不要输出[n]或[n1]。"
+            + "不得创造不存在的引用，也不要输出隐藏推理过程。"
             + " " + template_instruction(question_type)
             + ("当前资料依据有限，必须在答案中明确说明。" if scope == KnowledgeScope.INTERNAL_LIMITED else "")
         )
@@ -467,7 +468,8 @@ class RagService:
                 else editor_role
             )
             system += (
-                "公司事实只能来自内部资料，保留并校正[n]引用，不得创造引用，不要描述合并过程。"
+                "公司事实只能来自内部资料，保留并校正[1]、[2]格式的引用，绝对不要输出[n]或[n1]；"
+                "不得创造引用，不要描述合并过程。"
                 + " " + template_instruction(question_type)
             )
             content = (
@@ -477,7 +479,7 @@ class RagService:
         else:
             system = (
                 "内部资料库没有找到答案。请使用通用知识用中文回答，但开头必须明确写："
-                "“以下内容来自 DeepSeek 通用知识，不是公司资料结论。”不得添加任何[n]内部引用。"
+                "“以下内容来自 DeepSeek 通用知识，不是公司资料结论。”不得添加任何内部引用。"
             )
             content = request.question.strip()
         return [GenerationMessage(role="system", content=system), *self._history_messages(request), GenerationMessage(role="user", content=content)]

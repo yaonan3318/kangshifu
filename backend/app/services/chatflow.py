@@ -678,7 +678,13 @@ class ChatflowEngine:
             f"[{index + 1}] {item.document_name}：{item.content}" for index, item in enumerate(results)
         )
         messages = [
-            GenerationMessage(role="system", content="只能依据给出的内部资料回答，使用[n]引用。"),
+            GenerationMessage(
+                role="system",
+                content=(
+                    "只能依据给出的内部资料回答。每个关键结论使用真实数字编号引用，"
+                    "例如[1]或[2]；不要输出[n]或[n1]。"
+                ),
+            ),
             GenerationMessage(role="user", content=f"内部资料：\n{evidence}\n\n问题：{context.get('question')}"),
         ]
         started = perf_counter()

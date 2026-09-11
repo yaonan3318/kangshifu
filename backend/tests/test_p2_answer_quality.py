@@ -6,7 +6,7 @@ import uuid
 from app.schemas.answer import AnswerSource
 from app.services.answer_quality import (
     HIGH, INSUFFICIENT, MEDIUM, NO_RELEVANT_DOCUMENT, classify_question, compute_confidence,
-    mark_unsupported, no_answer_payload, template_instruction, verify_answer,
+    mark_unsupported, no_answer_payload, normalize_citations, template_instruction, verify_answer,
 )
 
 
@@ -31,6 +31,7 @@ def test_classify_question_types():
     assert classify_question("气泡项目现在进展如何？") == "PROGRESS"
     assert classify_question("方案 A 和方案 B 有什么区别？") == "COMPARISON"
     assert classify_question("帮我汇总一下本周工作") == "SUMMARY"
+    assert classify_question("日报") == "SUMMARY"
     assert classify_question("你好") == "GENERAL"
 
 
@@ -84,6 +85,10 @@ def test_verify_answer_accepts_supported_sentence():
     sources = [_source(1, "部署流程包括构建镜像和滚动更新")]
     report = verify_answer("部署流程包括构建镜像和滚动更新[1]。", sources)
     assert report.ok
+
+
+def test_normalize_citations_repairs_model_placeholder_prefix():
+    assert normalize_citations("结论[n1]，补充[N 2]。") == "结论[1]，补充[2]。"
 
 
 def test_verify_answer_marks_unavailable_citations():

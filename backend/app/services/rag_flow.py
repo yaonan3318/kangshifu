@@ -16,7 +16,7 @@ from app.schemas.answer import (
 )
 from app.services.answer_quality import (
     GENERAL, KB_SCOPE_UNCONFIGURED, LOW_RELEVANCE, MODEL_UNAVAILABLE, NO_RELEVANT_DOCUMENT,
-    QUESTION_TYPES, classify_question, compute_confidence, mark_unsupported,
+    QUESTION_TYPES, classify_question, compute_confidence, mark_unsupported, normalize_citations,
     no_answer_payload, verify_answer,
 )
 from app.llm import LlmError
@@ -272,6 +272,12 @@ def build_handlers(rag: Any, request: AnswerRequest, cfg: dict) -> dict:
         if not final_text and not sources:
             # 无内部资料且外部模型不可用时，给出固定提示，避免空白回答。
             final_text = NO_INTERNAL_ANSWER
+        normalized_text = normalize_citations(final_text)
+        if normalized_text != final_text:
+            final_text = normalized_text
+            provider = context.get("provider") or AnswerProvider.LOCAL
+            await context.send(AnswerEvent(type="replace", provider=provider, text=""))
+            await context.send(AnswerEvent(type="delta", provider=provider, text=final_text))
         citation_report = None
         answer_check_ms = 0.0
         if sources and cfg.get("answer_check_enabled", True):
