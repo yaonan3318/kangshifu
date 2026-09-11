@@ -1103,6 +1103,59 @@ progress::-webkit-progress-value { background: #3972bf; }
 .delta-down { color: #a5473f; font-weight: 700; }
 @media (max-width: 900px) { .config-grid { grid-template-columns: 1fr; } }
 
+/* 检索实验室与资料详情：主次操作保持一致，避免满宽色块和孤立胶囊按钮。 */
+.document-settings-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+.governance-form .document-settings-actions button {
+  width: auto;
+  min-width: 104px;
+  min-height: 40px;
+  padding: 0 16px;
+}
+.governance-form .document-settings-actions .secondary-action {
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--brand);
+}
+.governance-form .document-settings-actions .primary-action {
+  border: 1px solid var(--brand);
+  background: var(--brand);
+  color: #fff;
+}
+.lab-query .lab-inspect-action,
+.case-form .case-save-action,
+.case-form .dictionary-save-action,
+.config-form .config-save-action {
+  width: auto;
+  min-height: 42px;
+  padding-inline: 18px;
+  border: 1px solid var(--brand);
+  border-radius: 9px;
+  background: var(--brand);
+  color: #fff;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.case-form .case-save-action { justify-self: end; }
+.config-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+.config-form .config-form-actions .config-save-action { min-width: 148px; }
+@media (max-width: 720px) {
+  .document-settings-actions { justify-content: stretch; }
+  .governance-form .document-settings-actions button { flex: 1 1 140px; }
+  .case-form .case-save-action, .case-form .dictionary-save-action { justify-self: stretch; width: 100%; }
+}
+
 /* P2-1 检索准确性：改写展示与词典 */
 .query-rewrite-box { padding: 12px 14px; margin: 12px 0; border: 1px solid #d8e3d6; border-radius: 12px; background: #f4f8f2; }
 .query-rewrite-box dl { display: grid; gap: 6px; margin: 0; }

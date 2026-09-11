@@ -290,9 +290,11 @@ onMounted(() => { if (canManage.value) void loadAccessReferences() })
           <label>关联文档<input v-model="relatedDocs" placeholder="文档 ID，逗号分隔"></label>
           <label>生效时间<input v-model="validFrom" type="date"></label>
           <label>失效时间<input v-model="validUntil" type="date"></label>
-          <button @click="saveOverview">保存资料设置</button>
-          <button @click="reprocess">重新处理</button>
-          <button type="button" class="secondary-action" :disabled="previewLoading" @click="previewChunks">{{ previewLoading ? '解析中…' : '预览切片效果' }}</button>
+          <div class="document-settings-actions">
+            <button type="button" class="secondary-action" :disabled="previewLoading" @click="previewChunks">{{ previewLoading ? '解析中…' : '预览切片' }}</button>
+            <button type="button" class="secondary-action" @click="reprocess">重新处理</button>
+            <button type="button" class="primary-action" @click="saveOverview">保存资料设置</button>
+          </div>
         </div>
         <div v-if="chunkPreview.length" class="chunk-preview">
           <p class="assistant-hint">切片预览（共 {{ chunkPreview.length }} 条，未写入索引）</p>

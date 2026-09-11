@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from app.llm import LlmUnavailable
 from app.services.query_processing import QueryProcessor, _edit_distance
+from app.services.keywords import keyword_text
 from app.services.query_rewrite import QueryRewriteService
 from app.services.retrieval_config import RetrievalConfig
 from app.services.search import Candidate, SearchService
@@ -26,6 +27,18 @@ def test_query_processor_merges_config_and_dictionary():
     processor = QueryProcessor("日报|周报", dictionary={"日报": ["工作记录"]})
     processed = processor.process("看下日报")
     assert {"周报", "工作记录"} <= set(processed.expanded_terms)
+
+
+def test_dictionary_expansions_build_or_keyword_query():
+    """同义词用于扩大召回，不能被 plainto_tsquery 错误解释成全部必须命中。"""
+    processor = QueryProcessor("日报|周报|日报汇总", dictionary={"日报": ["工作记录"]})
+    processed = processor.process("日报")
+
+    query = SearchService._keyword_query_text(processed)
+
+    expected = [keyword_text(value) for value in [processed.normalized, *processed.expanded_terms]]
+    assert query.split(" OR ") == expected
+    assert len(expected) > 1
 
 
 def test_query_processor_spelling_correction():

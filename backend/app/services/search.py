@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 import hashlib
+import re
 from time import perf_counter
 import uuid
 
@@ -125,7 +126,9 @@ class SearchService:
             mark = perf_counter()
             # 关键词召回也使用词典扩展后的文本，使管理员维护的同义词/缩写/中英文映射
             # 同时影响关键词与向量两路召回，而不是只影响向量。
-            keyword = self._keyword_candidates(item.retrieval_text, request)
+            # 扩展词是原词的替代表达，应该扩大召回范围。websearch_to_tsquery
+            # 会保留每个表达内部的 AND 关系，并用显式 OR 连接不同表达。
+            keyword = self._keyword_candidates(self._keyword_query_text(item), request)
             keyword_ms += self._milliseconds(mark)
             mark = perf_counter()
             vector = self._vector_candidates(item.retrieval_text, request)
@@ -241,10 +244,10 @@ class SearchService:
         return clauses
 
     def _keyword_candidates(self, query: str, request: SearchRequest) -> list[Candidate]:
-        tokens = keyword_text(query)
-        if not tokens:
+        query = self._normalize_websearch_query(query)
+        if not query:
             return []
-        tsquery = func.plainto_tsquery("simple", tokens)
+        tsquery = func.websearch_to_tsquery("simple", query)
         rank = func.ts_rank_cd(DocumentChunk.search_vector, tsquery).label("keyword_score")
         rows = self.session.execute(
             select(DocumentChunk, Document, rank).join(Document).join(KnowledgeBase).where(
@@ -252,6 +255,23 @@ class SearchService:
             ).order_by(rank.desc(), DocumentChunk.id).limit(self.config.keyword_limit)
         ).all()
         return [Candidate(row[0], row[1], keyword_score=float(row[2] or 0), sources={"keyword"}) for row in rows]
+
+    @staticmethod
+    def _keyword_query_text(processed) -> str:
+        """把原始表达和同义表达组成 OR 查询，避免扩展后召回反而变窄。"""
+        alternatives = [processed.normalized, *processed.expanded_terms]
+        return " OR ".join(
+            tokens for value in alternatives if (tokens := keyword_text(value))
+        )
+
+    @staticmethod
+    def _normalize_websearch_query(query: str) -> str:
+        """兼容内部 OR 表达式和直接调用传入的未分词中文查询。"""
+        return " OR ".join(
+            tokens
+            for value in re.split(r"\s+OR\s+", query, flags=re.IGNORECASE)
+            if (tokens := keyword_text(value))
+        )
 
     def _vector_candidates(self, query: str, request: SearchRequest) -> list[Candidate]:
         vector = self.embeddings.encode_query(query)

@@ -334,7 +334,7 @@ onMounted(load)
       <div class="lab-query">
         <label>测试问题<textarea v-model="question" placeholder="输入一个真实的公司资料问题"></textarea></label>
         <label>知识库<select v-model="knowledgeBaseId"><option value="">全部知识库</option><option v-for="item in bases" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
-        <button :disabled="busy || !question.trim()" @click="inspect">{{ busy ? '分析中…' : '分析检索过程' }}</button>
+        <button class="primary-action lab-inspect-action" :disabled="busy || !question.trim()" @click="inspect">{{ busy ? '分析中…' : '分析检索过程' }}</button>
       </div>
     </section>
 
@@ -383,7 +383,7 @@ onMounted(load)
           <input v-model="caseForm.forbiddenDocs" placeholder="禁止召回文档">
           <input v-model="caseForm.keypoints" placeholder="答案关键点，分号分隔">
           <label><input v-model="caseForm.expectedNoAnswer" type="checkbox"> 应当无答案</label>
-          <button @click="saveCase">保存当前问题为用例</button>
+          <button class="primary-action case-save-action" @click="saveCase">保存为评测用例</button>
         </div>
         <label class="import-row">批量导入 CSV/Excel<input type="file" accept=".csv,.xlsx" @change="importCases"></label>
         <p v-if="importResult" class="assistant-hint">{{ importResult }}</p>
@@ -439,7 +439,7 @@ onMounted(load)
             <label>多查询数量<input type="number" min="2" max="4" :value="configNumber('multi_query_count')" @change="setConfigNumber('multi_query_count', Number(($event.target as HTMLInputElement).value))"></label>
           </div>
           <label class="admin-check-row"><input v-model="configForm.isDefault" type="checkbox"><span>设为默认配置</span></label>
-          <button type="submit">保存配置版本</button>
+          <div class="config-form-actions"><button type="submit" class="primary-action config-save-action">保存配置版本</button></div>
         </form>
       </div>
     </section>
@@ -456,7 +456,7 @@ onMounted(load)
         </select>
         <input v-model="dictionaryForm.term" placeholder="词条，如 k8s">
         <input v-model="dictionaryForm.expansions" placeholder="扩展词，分号分隔，如 kubernetes;容器编排">
-        <button @click="saveDictionary">保存词条</button>
+        <button class="primary-action dictionary-save-action" @click="saveDictionary">保存词条</button>
       </div>
       <ul class="governance-list">
         <li v-for="item in dictionaries" :key="item.id">
